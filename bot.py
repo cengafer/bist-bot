@@ -33,7 +33,7 @@ stocks = [
 ]
 
 # ======================
-# VERİ ÇEKME
+# VERİ
 # ======================
 def get_data(stock):
     for _ in range(3):
@@ -47,7 +47,7 @@ def get_data(stock):
     return None
 
 # ======================
-# OBV HESAP (HATASIZ)
+# OBV
 # ======================
 def calc_obv(df):
     close = df["Close"]
@@ -71,7 +71,7 @@ def calc_obv(df):
     return obv
 
 # ======================
-# ANALİZ
+# ANALİZ (YARI AGRESİF)
 # ======================
 def analyze(stock):
     df = get_data(stock)
@@ -79,11 +79,10 @@ def analyze(stock):
         return None
 
     close = df["Close"]
+    volume = df["Volume"]
 
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
-
-    volume = df["Volume"]
     if isinstance(volume, pd.DataFrame):
         volume = volume.iloc[:, 0]
 
@@ -112,28 +111,26 @@ def analyze(stock):
         return None
 
     # ======================
-    # SKOR SİSTEMİ
+    # SKOR
     # ======================
-
     dip = 0
     top = 0
 
-    # RSI
-    if rsi < 30:
-        dip += 40
-    elif rsi < 40:
+    # RSI (ESNETİLDİ)
+    if rsi < 35:
+        dip += 35
+    elif rsi < 45:
         dip += 20
-
-    if rsi > 70:
+    elif rsi > 70:
         top += 40
-    elif rsi > 65:
-        top += 25
+    elif rsi > 60:
+        top += 20
 
-    # EMA
+    # EMA (trend desteği)
     if ema20 < ema50:
         dip += 20
     else:
-        top += 15
+        top += 20
 
     # MACD
     if macd > 0:
@@ -141,11 +138,15 @@ def analyze(stock):
     else:
         top += 10
 
-    # OBV
+    # OBV (para girişi)
     if obv_now > obv_prev:
         dip += 20
     else:
         top += 20
+
+    # Momentum bonus
+    if rsi > 50 and rsi < 65:
+        dip += 10
 
     return round(dip), round(top), round(rsi)
 
@@ -153,20 +154,22 @@ def analyze(stock):
 # KARAR
 # ======================
 def decision(dip, top):
-    if dip > 65:
-        return "🟢 DİP - AL"
-    elif top > 65:
-        return "🔴 TEPE - SAT"
-    elif dip > top:
-        return "🟡 DİBE YAKIN - TAKİP"
+    if dip >= 55:
+        return "🟢 AL (Fırsat)"
+    elif dip >= 45:
+        return "🟡 AL DÜŞÜN"
+    elif top >= 60:
+        return "🔴 SAT (Tepe)"
+    elif top >= 45:
+        return "🟡 SAT DÜŞÜN"
     else:
-        return "⚪ KARARSIZ"
+        return "⚪ BEKLE"
 
 # ======================
-# ÇALIŞTIR
+# RUN
 # ======================
 def run():
-    buy, sell, wait = [], [], []
+    buy, mid, sell = [], [], []
 
     for stock in stocks:
         result = analyze(stock)
@@ -185,30 +188,27 @@ def run():
         elif "SAT" in action:
             sell.append("🔴 " + line)
         else:
-            wait.append("🟡 " + line)
+            mid.append("🟡 " + line)
 
         time.sleep(random.uniform(1,2))
 
     message = f"""
-📊 <b>DİP + TEPE AVCISI</b>
+📊 <b>YARI AGRESİF DİP + TEPE AVCISI</b>
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
-🟢 <b>AL (Dip)</b>
+🟢 <b>AL</b>
 {chr(10).join(buy) if buy else "Yok"}
 
-🟡 <b>İZLE</b>
-{chr(10).join(wait) if wait else "Yok"}
+🟡 <b>AL DÜŞÜN / İZLE</b>
+{chr(10).join(mid) if mid else "Yok"}
 
-🔴 <b>SAT (Tepe)</b>
+🔴 <b>SAT</b>
 {chr(10).join(sell) if sell else "Yok"}
 
-⚠️ Yatırım tavsiyesi değildir.
+⚠️ Yatırım tavsiyesi değildir
 """
 
     send_message(message)
 
-# ======================
-# START
-# ======================
 if __name__ == "__main__":
     run()
