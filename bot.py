@@ -22,15 +22,12 @@ def load_stocks():
         return [x.strip().upper() for x in f.readlines() if x.strip()]
 
 
-# 📊 VERİ ÇEK
+# 📊 VERİ
 def get_data(stock):
     try:
         df = yf.download(f"{stock}.IS", period="1y", interval="1d", progress=False)
 
         if df is None or df.empty:
-            return None
-
-        if "Close" not in df.columns:
             return None
 
         df = df[["Close"]].dropna()
@@ -45,20 +42,14 @@ def get_data(stock):
         return None
 
 
-# 🧠 ANALİZ (1D FIX)
+# 🧠 ANALİZ (YARI AGRESİF)
 def analyze(stock):
     df = get_data(stock)
     if df is None:
         return None
 
     try:
-        close = df["Close"]
-
-        # 🔥 1D FIX
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-
-        close = pd.Series(close.values)
+        close = pd.Series(df["Close"].values)
 
         price = close.iloc[-1]
 
@@ -68,25 +59,29 @@ def analyze(stock):
 
         score = 0
 
-        # RSI
+        # RSI (daha hassas)
         if rsi < 30:
-            score += 45
+            score += 50
         elif rsi < 40:
-            score += 25
-        elif rsi > 70:
-            score -= 30
+            score += 30
+        elif rsi < 50:
+            score += 10
+        elif rsi > 75:
+            score -= 50
+        elif rsi > 65:
+            score -= 25
 
         # Trend
         if price > ema20 > ema50:
-            score += 30
+            score += 40
         elif price < ema20 < ema50:
-            score -= 20
+            score -= 35
 
         # Momentum
-        if price > close.iloc[-5]:
-            score += 15
+        if price > close.iloc[-3]:
+            score += 25
         else:
-            score -= 10
+            score -= 20
 
         return {
             "stock": stock,
@@ -96,33 +91,38 @@ def analyze(stock):
             "df": df
         }
 
-    except Exception as e:
-        print(f"❌ ANALYSIS ERROR {stock}: {e}")
+    except:
         return None
 
 
-# 🎯 SİNYAL
+# 🎯 YARI AGRESİF SİNYAL
 def signal(score):
-    if score >= 60:
-        return "🟢 AL (Fırsat)"
+
+    if score >= 70:
+        return "🟢 GÜÇLÜ AL"
+    elif score >= 55:
+        return "🟢 AL"
     elif score >= 40:
-        return "🟡 İZLE"
+        return "🟡 AL DÜŞÜN"
+    elif score >= 25:
+        return "🟠 ZAYIF SAT"
     else:
         return "🔴 SAT"
 
 
 # 🧠 AI YORUM
 def ai_comment(rsi, score):
-    if rsi > 75:
-        return "⚠️ AŞIRI ALIM → TEPE RİSKİ!"
-    elif rsi < 30:
-        return "🧠 DIP BÖLGESİ → TOPLAMA FIRSATI"
-    elif score > 60:
-        return "🚀 Güçlü trend → yükseliş devam edebilir"
-    elif score > 40:
-        return "⚖️ Kararsız yapı"
+
+    if rsi < 30:
+        return "🧠 DIP bölgesi → güçlü tepki ihtimali"
+    elif rsi > 75:
+        return "⚠️ Aşırı alım → düzeltme riski"
+    elif score > 65:
+        return "🚀 Güçlü trend → momentum devam"
+    elif score > 45:
+        return "⚖️ Orta güçte yapı"
     else:
-        return "📉 Zayıf trend → satış baskısı"
+        return "📉 Zayıf trend"
 
 
 # 📉 BACKTEST
@@ -144,13 +144,13 @@ def backtest(df):
 
 
 # 🎯 SL / TP
-def risk_levels(price):
-    sl = round(price * 0.95, 2)
-    tp = round(price * 1.10, 2)
-    entry = round(price * 0.97, 2)
-    exit_price = round(price * 1.03, 2)
+def risk(price):
+    sl = round(price * 0.94, 2)
+    tp = round(price * 1.08, 2)
+    entry = round(price * 0.96, 2)
+    exit_p = round(price * 1.02, 2)
 
-    return entry, exit_price, sl, tp
+    return entry, exit_p, sl, tp
 
 
 # 🔗 TRADINGVIEW
@@ -160,7 +160,8 @@ def tv_link(stock):
 
 # 📊 RAPOR
 def build_report(results):
-    report = "🔥 DİNAMİK TRADER BOT PRO\n\n"
+
+    report = "🔥 YARI AGRESİF TRADER BOT\n\n"
 
     for r in results:
 
@@ -168,24 +169,16 @@ def build_report(results):
         ai = ai_comment(r["rsi"], r["score"])
         winrate = backtest(r["df"])
 
-        entry, exit_price, sl, tp = risk_levels(r["price"])
-
-        # ⚠️ TEPE UYARISI
-        top_warning = ""
-        if r["rsi"] > 75:
-            top_warning = "⚠️ DİKKAT: TEPEYE YAKIN → SAT DÜŞÜN"
+        entry, exit_p, sl, tp = risk(r["price"])
 
         report += f"{s} [{r['stock']}]({tv_link(r['stock'])})\n"
         report += f"💰 Fiyat: {round(r['price'],2)}\n"
-        report += f"📊 Entry: {entry} | Exit: {exit_price} | RSI: {round(r['rsi'],2)}\n"
+        report += f"📊 Entry: {entry} | Exit: {exit_p} | RSI: {round(r['rsi'],2)}\n"
         report += f"🎯 SL: {sl} | TP: {tp}\n"
         report += f"📈 Win Rate: %{winrate}\n"
-        report += f"{ai}\n"
+        report += f"{ai}\n\n"
 
-        if top_warning:
-            report += f"{top_warning}\n"
-
-        report += "\n━━━━━━━━━━━━━━\n\n"
+        report += "━━━━━━━━━━━━━━\n\n"
 
     report += "⚠️ Yatırım tavsiyesi değildir."
 
@@ -194,6 +187,7 @@ def build_report(results):
 
 # 📲 TELEGRAM
 def send(text):
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     requests.post(url, data={
@@ -206,6 +200,7 @@ def send(text):
 
 # 🚀 RUN
 def run():
+
     stocks = load_stocks()
 
     results = []
@@ -217,13 +212,14 @@ def run():
 
     results = sorted(results, key=lambda x: x["score"], reverse=True)
 
-    filtered = [r for r in results if r["score"] >= 35]
+    # 🔥 YARI AGRESİF: filtre hafif
+    filtered = results[:12]
 
     if not filtered:
-        send("❌ Uygun sinyal yok")
+        send("❌ Sinyal yok")
         return
 
-    report = build_report(filtered[:10])
+    report = build_report(filtered)
 
     send(report)
 
