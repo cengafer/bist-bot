@@ -15,14 +15,11 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={
-            "chat_id": CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        }, timeout=10)
-    except:
-        pass
+    requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    })
 
 # ======================
 # HİSSELER
@@ -33,193 +30,158 @@ stocks = [
 ]
 
 # ======================
-# VERİ ÇEKME
+# VERİ
 # ======================
-def download_data(stock):
+def get_data(stock):
     for _ in range(3):
         try:
-            df = yf.download(
-                stock,
-                period="6mo",
-                interval="1d",
-                progress=False,
-                threads=False
-            )
-
+            df = yf.download(stock, period="6mo", interval="1d", progress=False)
             if df is not None and not df.empty:
                 return df
-
         except:
             pass
-
-        time.sleep(random.uniform(1.5, 3))
-
+        time.sleep(random.uniform(1,2))
     return None
+
+# ======================
+# OBV (manuel)
+# ======================
+def calc_obv(df):
+    obv = [0]
+    for i in range(1, len(df)):
+        if df["Close"].iloc[i] > df["Close"].iloc[i-1]:
+            obv.append(obv[-1] + df["Volume"].iloc[i])
+        elif df["Close"].iloc[i] < df["Close"].iloc[i-1]:
+            obv.append(obv[-1] - df["Volume"].iloc[i])
+        else:
+            obv.append(obv[-1])
+    return obv
 
 # ======================
 # ANALİZ
 # ======================
 def analyze(stock):
-    df = download_data(stock)
-
-    if df is None or len(df) < 50:
+    df = get_data(stock)
+    if df is None or len(df) < 60:
         return None
 
     close = df["Close"]
-    volume = df["Volume"]
 
-    # Tek boyut garanti
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
 
-    # ======================
-    # İNDİKATÖRLER
-    # ======================
-    try:
-        df["EMA20"] = ta.trend.ema_indicator(close, 20)
-        df["EMA50"] = ta.trend.ema_indicator(close, 50)
-        df["RSI"] = ta.momentum.rsi(close, 14)
-        df["MACD"] = ta.trend.macd_diff(close)
-    except:
-        return None
+    df["EMA20"] = ta.trend.ema_indicator(close, 20)
+    df["EMA50"] = ta.trend.ema_indicator(close, 50)
+    df["RSI"] = ta.momentum.rsi(close, 14)
+    df["MACD"] = ta.trend.macd_diff(close)
 
-    # ======================
-    # MANUEL OBV
-    # ======================
-    obv = [0]
-
-    for i in range(1, len(df)):
-        if close.iloc[i] > close.iloc[i - 1]:
-            obv.append(obv[-1] + volume.iloc[i])
-        elif close.iloc[i] < close.iloc[i - 1]:
-            obv.append(obv[-1] - volume.iloc[i])
-        else:
-            obv.append(obv[-1])
-
-    df["OBV"] = obv
+    df["OBV"] = calc_obv(df)
 
     last = df.iloc[-1]
 
-    try:
-        ema20 = float(last["EMA20"])
-        ema50 = float(last["EMA50"])
-        rsi = float(last["RSI"])
-        macd = float(last["MACD"])
-        obv_last = float(last["OBV"])
-        obv_prev = float(df["OBV"].iloc[-2])
-    except:
-        return None
+    ema20 = float(last["EMA20"])
+    ema50 = float(last["EMA50"])
+    rsi = float(last["RSI"])
+    macd = float(last["MACD"])
+    obv_now = float(df["OBV"].iloc[-1])
+    obv_prev = float(df["OBV"].iloc[-2])
+
+    dip_score = 0
+    top_score = 0
 
     # ======================
-    # SKOR SİSTEMİ
+    # DIP SKORU (AL)
     # ======================
-    score = 0
-
-    # Trend
-    if ema20 > ema50:
-        score += 25
-    else:
-        score -= 15
-
-    # RSI
-    if 50 < rsi < 65:
-        score += 20
-    elif rsi > 70:
-        score -= 15
-
-    # MACD
-    if macd > 0:
-        score += 15
-    else:
-        score -= 10
-
-    # OBV (çok güçlü sinyal)
-    if obv_last > obv_prev:
-        score += 15
-    else:
-        score -= 10
-
-    # Aşırı satım fırsatı
     if rsi < 30:
-        score += 10
+        dip_score += 40
+    elif rsi < 40:
+        dip_score += 20
 
-    return round(score, 2)
+    if ema20 < ema50:
+        dip_score += 20
+
+    if obv_now > obv_prev:
+        dip_score += 20
+
+    if macd > 0:
+        dip_score += 10
+
+    # ======================
+    # TEPE SKORU (SAT)
+    # ======================
+    if rsi > 70:
+        top_score += 40
+    elif rsi > 65:
+        top_score += 25
+
+    if ema20 > ema50:
+        top_score += 15
+
+    if obv_now < obv_prev:
+        top_score += 20
+
+    if macd < 0:
+        top_score += 10
+
+    return round(dip_score), round(top_score), round(rsi)
 
 # ======================
-# YORUM
+# RİSK YORUMU
 # ======================
-def comment(score):
-    if score >= 70:
-        return "🚀 Güçlü yükseliş"
-    elif score >= 60:
-        return "📈 Alım fırsatı"
-    elif score >= 50:
-        return "🟡 İzle"
-    elif score >= 40:
-        return "⚠️ Zayıf"
+def decision(dip, top):
+    if dip > 60:
+        return "🟢 DİP FIRSATI - AL"
+    elif top > 60:
+        return "🔴 TEPE - SAT"
+    elif dip > top:
+        return "🟡 DİBE YAKIN - TAKİP"
     else:
-        return "📉 Düşüş"
+        return "⚪ KARARSIZ"
 
 # ======================
-# RAPOR
+# RUN
 # ======================
 def run():
-    buy = []
-    sell = []
-    wait = []
+    buy, sell, wait = [], [], []
 
     for stock in stocks:
-        score = analyze(stock)
-
-        if score is None:
+        result = analyze(stock)
+        if result is None:
             continue
 
+        dip, top, rsi = result
         name = stock.replace(".IS", "")
-        cmt = comment(score)
 
-        line = f"🔹 {name} ({score}) - {cmt}"
+        action = decision(dip, top)
 
-        if score >= 65:
+        line = f"{name} | Dip:{dip} | Tepe:{top} | RSI:{rsi}\n👉 {action}"
+
+        if "AL" in action:
             buy.append("🟢 " + line)
-        elif score <= 40:
+        elif "SAT" in action:
             sell.append("🔴 " + line)
         else:
-            wait.append("⚪ " + line)
+            wait.append("🟡 " + line)
 
-        time.sleep(random.uniform(1.5, 3))
+        time.sleep(random.uniform(1,2))
 
-    # GENEL YORUM
-    if len(buy) > len(sell):
-        market_comment = "📈 Alım baskısı güçlü"
-    elif len(sell) > len(buy):
-        market_comment = "📉 Satış baskısı güçlü"
-    else:
-        market_comment = "⚖️ Piyasa kararsız"
-
-    # MESAJ
     message = f"""
-📊 <b>BIST PRO RAPOR</b>
+📊 <b>DİP + TEPE AVCISI RAPOR</b>
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
-🧠 <b>PİYASA</b>
-{market_comment}
-
-🟢 <b>AL</b>
+🟢 <b>AL (Dip)</b>
 {chr(10).join(buy) if buy else "Yok"}
 
-🔴 <b>SAT</b>
-{chr(10).join(sell) if sell else "Yok"}
-
-⚪ <b>BEKLE</b>
+🟡 <b>İZLE</b>
 {chr(10).join(wait) if wait else "Yok"}
 
-⚠️ <b>Yatırım tavsiyesi değildir</b>
+🔴 <b>SAT (Tepe)</b>
+{chr(10).join(sell) if sell else "Yok"}
+
+⚠️ Yatırım tavsiyesi değildir
 """
 
     send_message(message)
 
-# ======================
-# START
-# ======================
 if __name__ == "__main__":
     run()
