@@ -27,10 +27,6 @@ def get_data(stock):
             return None
 
         df = df[["Close"]].dropna()
-        df["Close"] = df["Close"].astype(float)
-
-        if len(df) < 60:
-            return None
 
         return df
 
@@ -38,55 +34,68 @@ def get_data(stock):
         return None
 
 
-# 🧠 ANALİZ
+# 🧠 ANALİZ (HATASIZ)
 def analyze(stock):
 
     df = get_data(stock)
     if df is None:
         return None
 
-    close = pd.Series(df["Close"].values)
+    try:
+        close = df["Close"]
 
-    price = close.iloc[-1]
+        # 🔥 1D garanti
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
 
-    rsi = RSIIndicator(close).rsi().iloc[-1]
-    ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
-    ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
+        close = close.astype(float).dropna().squeeze()
 
-    score = 0
+        price = float(close.iloc[-1])
 
-    # RSI
-    if rsi < 30:
-        score += 50
-    elif rsi < 40:
-        score += 25
-    elif rsi > 75:
-        score -= 40
-    elif rsi > 65:
-        score -= 20
+        # RSI + EMA
+        rsi = RSIIndicator(close).rsi().iloc[-1]
+        ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
+        ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
 
-    # TREND
-    if price > ema20 > ema50:
-        score += 40
-    elif price < ema20 < ema50:
-        score -= 35
+        score = 0
 
-    # MOMENTUM
-    if price > close.iloc[-3]:
-        score += 20
-    else:
-        score -= 15
+        # RSI
+        if rsi < 30:
+            score += 50
+        elif rsi < 40:
+            score += 25
+        elif rsi > 75:
+            score -= 40
+        elif rsi > 65:
+            score -= 20
 
-    return {
-        "stock": stock,
-        "price": price,
-        "rsi": rsi,
-        "score": score,
-        "df": df
-    }
+        # TREND
+        if price > ema20 > ema50:
+            score += 40
+        elif price < ema20 < ema50:
+            score -= 35
+
+        # MOMENTUM
+        if len(close) > 3:
+            if price > close.iloc[-3]:
+                score += 20
+            else:
+                score -= 15
+
+        return {
+            "stock": stock,
+            "price": price,
+            "rsi": float(rsi),
+            "score": score,
+            "df": df
+        }
+
+    except Exception as e:
+        print(f"{stock} analiz hatası: {e}")
+        return None
 
 
-# 🎯 SİNYAL (AGRESİF)
+# 🎯 SİNYAL
 def signal(score):
 
     if score >= 60:
@@ -105,9 +114,9 @@ def signal(score):
 def ai_comment(rsi, score):
 
     if rsi < 30:
-        return "📉 DIP fırsatı"
+        return "📉 Dip fırsatı"
     elif rsi > 75:
-        return "⚠️ TEPE → satış riski"
+        return "⚠️ Tepe riski"
     elif score > 50:
         return "🚀 güçlü trend"
     elif score > 20:
@@ -116,7 +125,18 @@ def ai_comment(rsi, score):
         return "📉 zayıf yapı"
 
 
-# 📉 BACKTEST (basit)
+# 🎯 SL TP
+def risk(price):
+
+    entry = round(price * 0.97, 2)
+    exit_p = round(price * 1.03, 2)
+    sl = round(price * 0.94, 2)
+    tp = round(price * 1.08, 2)
+
+    return entry, exit_p, sl, tp
+
+
+# 📈 BACKTEST
 def backtest(df):
 
     close = df["Close"].values
@@ -130,17 +150,6 @@ def backtest(df):
         total += 1
 
     return round((wins / total) * 100, 2) if total > 0 else 0
-
-
-# 🎯 SL TP
-def risk(price):
-
-    entry = round(price * 0.97, 2)
-    exit_p = round(price * 1.03, 2)
-    sl = round(price * 0.94, 2)
-    tp = round(price * 1.08, 2)
-
-    return entry, exit_p, sl, tp
 
 
 # 🔗 TRADINGVIEW
@@ -203,10 +212,10 @@ def run():
             results.append(r)
 
     if not results:
-        send("❌ Veri yok")
+        send("❌ Sinyal yok")
         return
 
-    # 🔥 EN İYİ 12 HİSSE
+    # 🔥 EN İYİLER
     results = sorted(results, key=lambda x: x["score"], reverse=True)[:12]
 
     report = build_report(results)
