@@ -25,11 +25,13 @@ def send_message(text):
         pass
 
 # ======================
-# HİSSELER
+# BIST 100 (TEMEL LİSTE)
 # ======================
 stocks = [
-    "THYAO.IS","SISE.IS","KCHOL.IS","ASELS.IS","BIMAS.IS",
-    "EREGL.IS","GARAN.IS","AKBNK.IS","TUPRS.IS","FROTO.IS"
+    "THYAO.IS","SISE.IS","KCHOL.IS","ASELS.IS","BIMAS.IS","EREGL.IS",
+    "GARAN.IS","AKBNK.IS","TUPRS.IS","FROTO.IS",
+    "PETKM.IS","TOASO.IS","SAHOL.IS","KOZAL.IS","ISCTR.IS",
+    "YKBNK.IS","VESTL.IS","ULKER.IS","MGROS.IS","ENKAI.IS"
 ]
 
 # ======================
@@ -71,11 +73,11 @@ def calc_obv(df):
     return obv
 
 # ======================
-# ANALİZ (YARI AGRESİF)
+# PROFESYONEL ANALİZ
 # ======================
 def analyze(stock):
     df = get_data(stock)
-    if df is None or len(df) < 60:
+    if df is None or len(df) < 80:
         return None
 
     close = df["Close"]
@@ -86,10 +88,7 @@ def analyze(stock):
     if isinstance(volume, pd.DataFrame):
         volume = volume.iloc[:, 0]
 
-    df = pd.DataFrame({
-        "Close": close,
-        "Volume": volume
-    })
+    df = pd.DataFrame({"Close": close, "Volume": volume})
 
     # İNDİKATÖRLER
     df["EMA20"] = ta.trend.ema_indicator(df["Close"], 20)
@@ -107,61 +106,70 @@ def analyze(stock):
         macd = float(last["MACD"])
         obv_now = float(df["OBV"].iloc[-1])
         obv_prev = float(df["OBV"].iloc[-2])
+        price = float(df["Close"].iloc[-1])
     except:
         return None
 
     # ======================
-    # SKOR
+    # GİRİŞ SKORU (DİP)
     # ======================
-    dip = 0
-    top = 0
+    entry = 0
 
-    # RSI (ESNETİLDİ)
     if rsi < 35:
-        dip += 35
+        entry += 30
     elif rsi < 45:
-        dip += 20
-    elif rsi > 70:
-        top += 40
-    elif rsi > 60:
-        top += 20
+        entry += 15
 
-    # EMA (trend desteği)
     if ema20 < ema50:
-        dip += 20
+        entry += 20
     else:
-        top += 20
+        entry += 10
 
-    # MACD
-    if macd > 0:
-        dip += 10
-    else:
-        top += 10
-
-    # OBV (para girişi)
     if obv_now > obv_prev:
-        dip += 20
-    else:
-        top += 20
+        entry += 20
 
-    # Momentum bonus
-    if rsi > 50 and rsi < 65:
-        dip += 10
+    if macd > 0:
+        entry += 10
 
-    return round(dip), round(top), round(rsi)
+    # ======================
+    # ÇIKIŞ SKORU (TEPE)
+    # ======================
+    exit_score = 0
+
+    if rsi > 70:
+        exit_score += 40
+    elif rsi > 60:
+        exit_score += 20
+
+    if ema20 > ema50:
+        exit_score += 15
+
+    if obv_now < obv_prev:
+        exit_score += 20
+
+    if macd < 0:
+        exit_score += 10
+
+    # ======================
+    # STOP LOSS / TP
+    # ======================
+    stop_loss = round(price * 0.95, 2)
+    take_profit = round(price * 1.10, 2)
+
+    return round(entry), round(exit_score), rsi, price, stop_loss, take_profit
 
 # ======================
 # KARAR
 # ======================
-def decision(dip, top):
-    if dip >= 55:
-        return "🟢 AL (Fırsat)"
-    elif dip >= 45:
-        return "🟡 AL DÜŞÜN"
-    elif top >= 60:
-        return "🔴 SAT (Tepe)"
-    elif top >= 45:
-        return "🟡 SAT DÜŞÜN"
+def decision(entry, exit_score):
+    if entry > 55:
+        return "🟢 GİRİŞ"
+    elif entry > 45:
+        return "🟡 DÜŞÜN"
+    elif exit_score > 60:
+        return "🔴 SAT"
+    elif exit_score > 40:
+        return "🟠 SAT DÜŞÜN"
     else:
         return "⚪ BEKLE"
 
@@ -169,43 +177,47 @@ def decision(dip, top):
 # RUN
 # ======================
 def run():
-    buy, mid, sell = [], [], []
+    buy, watch, sell = [], [], []
 
     for stock in stocks:
         result = analyze(stock)
         if result is None:
             continue
 
-        dip, top, rsi = result
+        entry, exit_score, rsi, price, sl, tp = result
         name = stock.replace(".IS", "")
 
-        action = decision(dip, top)
+        action = decision(entry, exit_score)
 
-        line = f"{name} | Dip:{dip} | Tepe:{top} | RSI:{round(rsi,1)}\n👉 {action}"
+        text = f"""{name}
+💰 Fiyat: {price}
+📊 Entry: {entry} | Exit: {exit_score} | RSI: {round(rsi,1)}
+🎯 SL: {sl} | TP: {tp}
+👉 {action}"""
 
-        if "AL" in action:
-            buy.append("🟢 " + line)
+        if "GİRİŞ" in action:
+            buy.append("🟢 " + text)
         elif "SAT" in action:
-            sell.append("🔴 " + line)
+            sell.append("🔴 " + text)
         else:
-            mid.append("🟡 " + line)
+            watch.append("🟡 " + text)
 
         time.sleep(random.uniform(1,2))
 
     message = f"""
-📊 <b>YARI AGRESİF DİP + TEPE AVCISI</b>
+📊 <b>BIST 100 PRO RAPOR</b>
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
-🟢 <b>AL</b>
+🟢 <b>GİRİŞ</b>
 {chr(10).join(buy) if buy else "Yok"}
 
-🟡 <b>AL DÜŞÜN / İZLE</b>
-{chr(10).join(mid) if mid else "Yok"}
+🟡 <b>İZLE</b>
+{chr(10).join(watch) if watch else "Yok"}
 
-🔴 <b>SAT</b>
+🔴 <b>ÇIKIŞ</b>
 {chr(10).join(sell) if sell else "Yok"}
 
-⚠️ Yatırım tavsiyesi değildir
+⚠️ Bu sistem profesyonel analiz içindir, yatırım tavsiyesi değildir.
 """
 
     send_message(message)
