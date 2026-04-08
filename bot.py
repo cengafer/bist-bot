@@ -1,226 +1,155 @@
-import requests
-import yfinance as yf
-import pandas as pd
-import ta
-import time
-import random
 import os
-from datetime import datetime
+import requests
+import pandas as pd
+import yfinance as yf
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
 
-# ======================
-# TELEGRAM
-# ======================
+# 🔐 ENV (GitHub Secrets)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def send_message(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={
-            "chat_id": CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        }, timeout=10)
-    except:
-        pass
+# 📊 AYARLAR
+RSI_PERIOD = 14
 
-# ======================
-# BIST 100 (TEMEL LİSTE)
-# ======================
-stocks = [
-    "THYAO.IS","SISE.IS","KCHOL.IS","ASELS.IS","BIMAS.IS","EREGL.IS",
-    "GARAN.IS","AKBNK.IS","TUPRS.IS","FROTO.IS",
-    "PETKM.IS","TOASO.IS","SAHOL.IS","KOZAL.IS","ISCTR.IS",
-    "YKBNK.IS","VESTL.IS","ULKER.IS","MGROS.IS","ENKAI.IS"
-]
 
-# ======================
-# VERİ
-# ======================
+# 📌 TradingView link
+def tv_link(stock):
+    return f"https://www.tradingview.com/chart/?symbol=BIST:{stock}"
+
+
+# 📌 BIST listesi
+def load_stocks():
+    with open("bist100.txt", "r") as f:
+        return [line.strip() for line in f.readlines() if line.strip()]
+
+
+# 📊 Veri çek
 def get_data(stock):
-    for _ in range(3):
-        try:
-            df = yf.download(stock, period="6mo", interval="1d", progress=False)
-            if df is not None and not df.empty:
-                return df
-        except:
-            pass
-        time.sleep(random.uniform(1,2))
-    return None
+    df = yf.download(f"{stock}.IS", period="6mo", interval="1d")
 
-# ======================
-# OBV
-# ======================
-def calc_obv(df):
-    close = df["Close"]
-    volume = df["Volume"]
+    if df.empty:
+        return None
 
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-    if isinstance(volume, pd.DataFrame):
-        volume = volume.iloc[:, 0]
+    df.dropna(inplace=True)
+    return df
 
-    obv = [0]
 
-    for i in range(1, len(close)):
-        if close.iloc[i] > close.iloc[i-1]:
-            obv.append(obv[-1] + volume.iloc[i])
-        elif close.iloc[i] < close.iloc[i-1]:
-            obv.append(obv[-1] - volume.iloc[i])
-        else:
-            obv.append(obv[-1])
-
-    return obv
-
-# ======================
-# PROFESYONEL ANALİZ
-# ======================
+# 🧠 ANALİZ
 def analyze(stock):
     df = get_data(stock)
-    if df is None or len(df) < 80:
+
+    if df is None or len(df) < 20:
         return None
 
     close = df["Close"]
-    volume = df["Volume"]
 
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-    if isinstance(volume, pd.DataFrame):
-        volume = volume.iloc[:, 0]
+    # RSI
+    rsi = RSIIndicator(close, window=RSI_PERIOD).rsi().iloc[-1]
 
-    df = pd.DataFrame({"Close": close, "Volume": volume})
+    # EMA
+    ema = EMAIndicator(close, window=20).ema_indicator()
+    trend_up = close.iloc[-1] > ema.iloc[-1]
 
-    # İNDİKATÖRLER
-    df["EMA20"] = ta.trend.ema_indicator(df["Close"], 20)
-    df["EMA50"] = ta.trend.ema_indicator(df["Close"], 50)
-    df["RSI"] = ta.momentum.rsi(df["Close"], 14)
-    df["MACD"] = ta.trend.macd_diff(df["Close"])
-    df["OBV"] = calc_obv(df)
+    # skor sistemi
+    score = 0
 
-    last = df.iloc[-1]
-
-    try:
-        ema20 = float(last["EMA20"])
-        ema50 = float(last["EMA50"])
-        rsi = float(last["RSI"])
-        macd = float(last["MACD"])
-        obv_now = float(df["OBV"].iloc[-1])
-        obv_prev = float(df["OBV"].iloc[-2])
-        price = float(df["Close"].iloc[-1])
-    except:
-        return None
-
-    # ======================
-    # GİRİŞ SKORU (DİP)
-    # ======================
-    entry = 0
-
+    # RSI katkısı
     if rsi < 35:
-        entry += 30
+        score += 40
     elif rsi < 45:
-        entry += 15
+        score += 30
+    elif rsi < 55:
+        score += 10
+    elif rsi > 65:
+        score -= 30
 
-    if ema20 < ema50:
-        entry += 20
+    # trend katkısı
+    if trend_up:
+        score += 30
     else:
-        entry += 10
+        score -= 20
 
-    if obv_now > obv_prev:
-        entry += 20
+    # momentum
+    if close.iloc[-1] > close.iloc[-5]:
+        score += 20
+    else:
+        score -= 10
 
-    if macd > 0:
-        entry += 10
+    return {
+        "stock": stock,
+        "score": score,
+        "rsi": round(rsi, 2),
+        "price": round(close.iloc[-1], 2)
+    }
 
-    # ======================
-    # ÇIKIŞ SKORU (TEPE)
-    # ======================
-    exit_score = 0
 
-    if rsi > 70:
-        exit_score += 40
-    elif rsi > 60:
-        exit_score += 20
-
-    if ema20 > ema50:
-        exit_score += 15
-
-    if obv_now < obv_prev:
-        exit_score += 20
-
-    if macd < 0:
-        exit_score += 10
-
-    # ======================
-    # STOP LOSS / TP
-    # ======================
-    stop_loss = round(price * 0.95, 2)
-    take_profit = round(price * 1.10, 2)
-
-    return round(entry), round(exit_score), rsi, price, stop_loss, take_profit
-
-# ======================
-# KARAR
-# ======================
-def decision(entry, exit_score):
-    if entry > 55:
-        return "🟢 GİRİŞ"
-    elif entry > 45:
-        return "🟡 DÜŞÜN"
-    elif exit_score > 60:
+# 🧠 SINIFLANDIR
+def classify(score):
+    if score >= 60:
+        return "🟢 AL"
+    elif score >= 40:
+        return "🟡 İZLE"
+    else:
         return "🔴 SAT"
-    elif exit_score > 40:
-        return "🟠 SAT DÜŞÜN"
-    else:
-        return "⚪ BEKLE"
 
-# ======================
-# RUN
-# ======================
+
+# 📊 RAPOR
+def build_report(results):
+    report = "📊 BIST 100 RAPOR\n\n"
+
+    for r in results:
+        stock = r["stock"]
+        score = r["score"]
+        rsi = r["rsi"]
+        price = r["price"]
+
+        signal = classify(score)
+        link = tv_link(stock)
+
+        report += f"{signal} [{stock}]({link})\n"
+        report += f"💰 {price} | RSI: {rsi} | Score: {score}\n\n"
+
+    return report
+
+
+# 📲 TELEGRAM
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+
+    requests.post(url, data=data)
+
+
+# 🚀 MAIN
 def run():
-    buy, watch, sell = [], [], []
+    stocks = load_stocks()
+    results = []
 
     for stock in stocks:
-        result = analyze(stock)
-        if result is None:
+        try:
+            res = analyze(stock)
+            if res:
+                results.append(res)
+        except:
             continue
 
-        entry, exit_score, rsi, price, sl, tp = result
-        name = stock.replace(".IS", "")
+    if not results:
+        send_telegram("❌ Veri alınamadı")
+        return
 
-        action = decision(entry, exit_score)
+    # skor sıralama
+    results = sorted(results, key=lambda x: x["score"], reverse=True)
 
-        text = f"""{name}
-💰 Fiyat: {price}
-📊 Entry: {entry} | Exit: {exit_score} | RSI: {round(rsi,1)}
-🎯 SL: {sl} | TP: {tp}
-👉 {action}"""
+    report = build_report(results[:15])  # en iyi 15
 
-        if "GİRİŞ" in action:
-            buy.append("🟢 " + text)
-        elif "SAT" in action:
-            sell.append("🔴 " + text)
-        else:
-            watch.append("🟡 " + text)
+    send_telegram(report)
 
-        time.sleep(random.uniform(1,2))
-
-    message = f"""
-📊 <b>BIST 100 PRO RAPOR</b>
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
-
-🟢 <b>GİRİŞ</b>
-{chr(10).join(buy) if buy else "Yok"}
-
-🟡 <b>İZLE</b>
-{chr(10).join(watch) if watch else "Yok"}
-
-🔴 <b>ÇIKIŞ</b>
-{chr(10).join(sell) if sell else "Yok"}
-
-⚠️ Bu sistem profesyonel analiz içindir, yatırım tavsiyesi değildir.
-"""
-
-    send_message(message)
 
 if __name__ == "__main__":
     run()
