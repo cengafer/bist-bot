@@ -5,86 +5,98 @@ import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 
-# 🔐 ENV (GitHub Secrets)
+# 🔐 ENV
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# 📊 AYARLAR
+# ⚙️ AYAR
 RSI_PERIOD = 14
 
 
-# 📌 TradingView link
-def tv_link(stock):
-    return f"https://www.tradingview.com/chart/?symbol=BIST:{stock}"
-
-
-# 📌 BIST listesi
+# 📊 BIST LISTESI
 def load_stocks():
     with open("bist100.txt", "r") as f:
-        return [line.strip() for line in f.readlines() if line.strip()]
+        return [x.strip().upper() for x in f.readlines() if x.strip()]
 
 
-# 📊 Veri çek
+# 📈 DATA ÇEK
 def get_data(stock):
-    df = yf.download(f"{stock}.IS", period="6mo", interval="1d")
+    symbol = f"{stock}.IS"
 
-    if df.empty:
+    try:
+        df = yf.download(symbol, period="6mo", interval="1d", progress=False)
+
+        if df is None or df.empty:
+            return None
+
+        df = df.dropna()
+
+        # güvenlik: tek kolon vs bug fix
+        if isinstance(df, pd.DataFrame) and len(df.columns) > 1:
+            df = df.copy()
+
+        return df
+
+    except Exception as e:
+        print(f"❌ DATA ERROR {stock}: {e}")
         return None
-
-    df.dropna(inplace=True)
-    return df
 
 
 # 🧠 ANALİZ
 def analyze(stock):
     df = get_data(stock)
 
-    if df is None or len(df) < 20:
+    if df is None or len(df) < 30:
         return None
 
     close = df["Close"]
 
-    # RSI
-    rsi = RSIIndicator(close, window=RSI_PERIOD).rsi().iloc[-1]
+    try:
+        # RSI
+        rsi = RSIIndicator(close, window=RSI_PERIOD).rsi().iloc[-1]
 
-    # EMA
-    ema = EMAIndicator(close, window=20).ema_indicator()
-    trend_up = close.iloc[-1] > ema.iloc[-1]
+        # EMA
+        ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
+        ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
 
-    # skor sistemi
-    score = 0
+        price = close.iloc[-1]
 
-    # RSI katkısı
-    if rsi < 35:
-        score += 40
-    elif rsi < 45:
-        score += 30
-    elif rsi < 55:
-        score += 10
-    elif rsi > 65:
-        score -= 30
+        # skor sistemi
+        score = 0
 
-    # trend katkısı
-    if trend_up:
-        score += 30
-    else:
-        score -= 20
+        # RSI
+        if rsi < 35:
+            score += 40
+        elif rsi < 45:
+            score += 25
+        elif rsi > 65:
+            score -= 25
 
-    # momentum
-    if close.iloc[-1] > close.iloc[-5]:
-        score += 20
-    else:
-        score -= 10
+        # trend
+        if price > ema20 > ema50:
+            score += 30
+        elif price < ema20 < ema50:
+            score -= 20
 
-    return {
-        "stock": stock,
-        "score": score,
-        "rsi": round(rsi, 2),
-        "price": round(close.iloc[-1], 2)
-    }
+        # momentum
+        if price > close.iloc[-5]:
+            score += 15
+        else:
+            score -= 10
+
+        return {
+            "stock": stock,
+            "score": int(score),
+            "rsi": round(rsi, 2),
+            "price": round(price, 2)
+        }
+
+    except Exception as e:
+        print(f"❌ ANALYSIS ERROR {stock}: {e}")
+        return None
 
 
-# 🧠 SINIFLANDIR
+# 🎯 SINIF
 def classify(score):
     if score >= 60:
         return "🟢 AL"
@@ -94,9 +106,14 @@ def classify(score):
         return "🔴 SAT"
 
 
+# 🔗 TRADINGVIEW
+def tv_link(stock):
+    return f"https://www.tradingview.com/chart/?symbol=BIST:{stock}"
+
+
 # 📊 RAPOR
 def build_report(results):
-    report = "📊 BIST 100 RAPOR\n\n"
+    report = "📊 BIST 100 PRO RAPOR\n\n"
 
     for r in results:
         stock = r["stock"]
@@ -108,45 +125,54 @@ def build_report(results):
         link = tv_link(stock)
 
         report += f"{signal} [{stock}]({link})\n"
-        report += f"💰 {price} | RSI: {rsi} | Score: {score}\n\n"
+        report += f"💰 {price} | RSI: {rsi} | Skor: {score}\n\n"
+
+    report += "⚠️ Yatırım tavsiyesi değildir."
 
     return report
 
 
 # 📲 TELEGRAM
-def send_telegram(message):
+def send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("❌ TOKEN veya CHAT_ID eksik")
+        return
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    data = {
+    payload = {
         "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
     }
 
-    requests.post(url, data=data)
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"❌ TELEGRAM ERROR: {e}")
 
 
 # 🚀 MAIN
 def run():
     stocks = load_stocks()
+
     results = []
 
     for stock in stocks:
-        try:
-            res = analyze(stock)
-            if res:
-                results.append(res)
-        except:
-            continue
+        res = analyze(stock)
+        if res:
+            results.append(res)
 
     if not results:
-        send_telegram("❌ Veri alınamadı")
+        send_telegram("❌ Veri bulunamadı")
         return
 
-    # skor sıralama
+    # sıralama
     results = sorted(results, key=lambda x: x["score"], reverse=True)
 
-    report = build_report(results[:15])  # en iyi 15
+    # en iyi 15
+    report = build_report(results[:15])
 
     send_telegram(report)
 
