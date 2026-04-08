@@ -4,6 +4,9 @@ import pandas as pd
 import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
+import warnings
+
+warnings.filterwarnings("ignore")
 
 # 🔐 ENV
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -19,12 +22,15 @@ def load_stocks():
         return [x.strip().upper() for x in f.readlines() if x.strip()]
 
 
-# 📊 DATA
+# 📊 VERİ ÇEK
 def get_data(stock):
     try:
         df = yf.download(f"{stock}.IS", period="1y", interval="1d", progress=False)
 
         if df is None or df.empty:
+            return None
+
+        if "Close" not in df.columns:
             return None
 
         df = df[["Close"]].dropna()
@@ -39,48 +45,60 @@ def get_data(stock):
         return None
 
 
-# 🧠 ANALİZ
+# 🧠 ANALİZ (1D FIX)
 def analyze(stock):
     df = get_data(stock)
     if df is None:
         return None
 
-    close = pd.Series(df["Close"].values)
-    price = close.iloc[-1]
+    try:
+        close = df["Close"]
 
-    rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
-    ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
-    ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
+        # 🔥 1D FIX
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
 
-    score = 0
+        close = pd.Series(close.values)
 
-    # RSI
-    if rsi < 30:
-        score += 45
-    elif rsi < 40:
-        score += 25
-    elif rsi > 70:
-        score -= 35
+        price = close.iloc[-1]
 
-    # Trend
-    if price > ema20 > ema50:
-        score += 30
-    elif price < ema20 < ema50:
-        score -= 25
+        rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
+        ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
+        ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
 
-    # Momentum
-    if price > close.iloc[-5]:
-        score += 15
-    else:
-        score -= 10
+        score = 0
 
-    return {
-        "stock": stock,
-        "price": price,
-        "rsi": rsi,
-        "score": score,
-        "df": df
-    }
+        # RSI
+        if rsi < 30:
+            score += 45
+        elif rsi < 40:
+            score += 25
+        elif rsi > 70:
+            score -= 30
+
+        # Trend
+        if price > ema20 > ema50:
+            score += 30
+        elif price < ema20 < ema50:
+            score -= 20
+
+        # Momentum
+        if price > close.iloc[-5]:
+            score += 15
+        else:
+            score -= 10
+
+        return {
+            "stock": stock,
+            "price": price,
+            "rsi": rsi,
+            "score": score,
+            "df": df
+        }
+
+    except Exception as e:
+        print(f"❌ ANALYSIS ERROR {stock}: {e}")
+        return None
 
 
 # 🎯 SİNYAL
@@ -96,16 +114,18 @@ def signal(score):
 # 🧠 AI YORUM
 def ai_comment(rsi, score):
     if rsi > 75:
-        return "⚠️ AŞIRI ALIM → SATIŞ RİSKİ YÜKSEK"
+        return "⚠️ AŞIRI ALIM → TEPE RİSKİ!"
     elif rsi < 30:
-        return "🧠 AŞIRI SATIM → DIP FIRSATI"
+        return "🧠 DIP BÖLGESİ → TOPLAMA FIRSATI"
     elif score > 60:
-        return "🚀 Güçlü trend → momentum devam ediyor"
+        return "🚀 Güçlü trend → yükseliş devam edebilir"
+    elif score > 40:
+        return "⚖️ Kararsız yapı"
     else:
-        return "⚖️ Kararsız yapı → dikkatli ol"
+        return "📉 Zayıf trend → satış baskısı"
 
 
-# 📉 BACKTEST (Win Rate)
+# 📉 BACKTEST
 def backtest(df):
     close = df["Close"].values
 
@@ -113,19 +133,24 @@ def backtest(df):
     trades = 0
 
     for i in range(50, len(close) - 5):
-        entry = close[i]
-        future = close[i + 5]
-
-        # basit strateji
-        if entry < future:
+        if close[i] < close[i + 5]:
             wins += 1
-
         trades += 1
 
     if trades == 0:
         return 0
 
     return round((wins / trades) * 100, 2)
+
+
+# 🎯 SL / TP
+def risk_levels(price):
+    sl = round(price * 0.95, 2)
+    tp = round(price * 1.10, 2)
+    entry = round(price * 0.97, 2)
+    exit_price = round(price * 1.03, 2)
+
+    return entry, exit_price, sl, tp
 
 
 # 🔗 TRADINGVIEW
@@ -135,32 +160,28 @@ def tv_link(stock):
 
 # 📊 RAPOR
 def build_report(results):
-    report = "🔥 DİNAMİK TRADER BOT (PRO)\n\n"
+    report = "🔥 DİNAMİK TRADER BOT PRO\n\n"
 
     for r in results:
 
         s = signal(r["score"])
         ai = ai_comment(r["rsi"], r["score"])
-
         winrate = backtest(r["df"])
 
-        price = round(r["price"], 2)
+        entry, exit_price, sl, tp = risk_levels(r["price"])
 
-        # SL / TP
-        sl = round(price * 0.95, 2)
-        tp = round(price * 1.10, 2)
-
-        # 🔴 TEPEDEN SAT UYARISI
+        # ⚠️ TEPE UYARISI
         top_warning = ""
-        if r["rsi"] > 75 and r["price"] > r["df"]["Close"].rolling(20).mean().iloc[-1]:
-            top_warning = "⚠️ DİKKAT: TEPEYE YAKIN → KAR AL DÜŞÜN"
+        if r["rsi"] > 75:
+            top_warning = "⚠️ DİKKAT: TEPEYE YAKIN → SAT DÜŞÜN"
 
         report += f"{s} [{r['stock']}]({tv_link(r['stock'])})\n"
-        report += f"💰 Fiyat: {price}\n"
-        report += f"📊 Entry: {round(price*0.95,2)} | Exit: {round(price*1.02,2)} | RSI: {round(r['rsi'],2)}\n"
+        report += f"💰 Fiyat: {round(r['price'],2)}\n"
+        report += f"📊 Entry: {entry} | Exit: {exit_price} | RSI: {round(r['rsi'],2)}\n"
         report += f"🎯 SL: {sl} | TP: {tp}\n"
         report += f"📈 Win Rate: %{winrate}\n"
         report += f"{ai}\n"
+
         if top_warning:
             report += f"{top_warning}\n"
 
@@ -199,7 +220,7 @@ def run():
     filtered = [r for r in results if r["score"] >= 35]
 
     if not filtered:
-        send("❌ Sinyal bulunamadı")
+        send("❌ Uygun sinyal yok")
         return
 
     report = build_report(filtered[:10])
