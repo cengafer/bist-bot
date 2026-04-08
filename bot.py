@@ -4,47 +4,33 @@ import pandas as pd
 import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
-import warnings
-
-warnings.filterwarnings("ignore")
 
 # 🔐 ENV
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# ⚙️ AYARLAR
+# ⚙️ AYAR
 RSI_PERIOD = 14
 
 
-# 📂 HİSSE LİSTESİ
+# 📂 HİSSELER
 def load_stocks():
     with open("bist100.txt", "r") as f:
         return [x.strip().upper() for x in f.readlines() if x.strip()]
 
 
-# 📊 VERİ ÇEK
+# 📊 DATA
 def get_data(stock):
-    symbol = f"{stock}.IS"
-
     try:
-        df = yf.download(symbol, period="6mo", interval="1d", progress=False)
+        df = yf.download(f"{stock}.IS", period="1y", interval="1d", progress=False)
 
         if df is None or df.empty:
             return None
 
-        # multi-index fix
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        if "Close" not in df.columns:
-            return None
-
-        df = df[["Close"]].copy()
+        df = df[["Close"]].dropna()
         df["Close"] = df["Close"].astype(float)
 
-        df = df.dropna()
-
-        if len(df) < 50:
+        if len(df) < 100:
             return None
 
         return df
@@ -56,62 +42,90 @@ def get_data(stock):
 # 🧠 ANALİZ
 def analyze(stock):
     df = get_data(stock)
-
     if df is None:
         return None
 
-    try:
-        close = pd.Series(df["Close"].values)
+    close = pd.Series(df["Close"].values)
+    price = close.iloc[-1]
 
-        # indikatörler
-        rsi = RSIIndicator(close, window=RSI_PERIOD).rsi().iloc[-1]
-        ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
-        ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
+    rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
+    ema20 = EMAIndicator(close, window=20).ema_indicator().iloc[-1]
+    ema50 = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
 
-        price = close.iloc[-1]
+    score = 0
 
-        score = 0
+    # RSI
+    if rsi < 30:
+        score += 45
+    elif rsi < 40:
+        score += 25
+    elif rsi > 70:
+        score -= 35
 
-        # RSI
-        if rsi < 30:
-            score += 45
-        elif rsi < 40:
-            score += 30
-        elif rsi > 70:
-            score -= 30
+    # Trend
+    if price > ema20 > ema50:
+        score += 30
+    elif price < ema20 < ema50:
+        score -= 25
 
-        # Trend
-        if price > ema20 > ema50:
-            score += 30
-        elif price < ema20 < ema50:
-            score -= 20
+    # Momentum
+    if price > close.iloc[-5]:
+        score += 15
+    else:
+        score -= 10
 
-        # Momentum
-        if len(close) > 5:
-            if price > close.iloc[-5]:
-                score += 15
-            else:
-                score -= 10
-
-        return {
-            "stock": stock,
-            "score": int(score),
-            "rsi": round(rsi, 2),
-            "price": round(price, 2)
-        }
-
-    except:
-        return None
+    return {
+        "stock": stock,
+        "price": price,
+        "rsi": rsi,
+        "score": score,
+        "df": df
+    }
 
 
-# 🎯 SINIFLANDIRMA
-def classify(score):
+# 🎯 SİNYAL
+def signal(score):
     if score >= 60:
-        return "🟢 AL"
+        return "🟢 AL (Fırsat)"
     elif score >= 40:
         return "🟡 İZLE"
     else:
         return "🔴 SAT"
+
+
+# 🧠 AI YORUM
+def ai_comment(rsi, score):
+    if rsi > 75:
+        return "⚠️ AŞIRI ALIM → SATIŞ RİSKİ YÜKSEK"
+    elif rsi < 30:
+        return "🧠 AŞIRI SATIM → DIP FIRSATI"
+    elif score > 60:
+        return "🚀 Güçlü trend → momentum devam ediyor"
+    else:
+        return "⚖️ Kararsız yapı → dikkatli ol"
+
+
+# 📉 BACKTEST (Win Rate)
+def backtest(df):
+    close = df["Close"].values
+
+    wins = 0
+    trades = 0
+
+    for i in range(50, len(close) - 5):
+        entry = close[i]
+        future = close[i + 5]
+
+        # basit strateji
+        if entry < future:
+            wins += 1
+
+        trades += 1
+
+    if trades == 0:
+        return 0
+
+    return round((wins / trades) * 100, 2)
 
 
 # 🔗 TRADINGVIEW
@@ -121,19 +135,36 @@ def tv_link(stock):
 
 # 📊 RAPOR
 def build_report(results):
-    report = "📊 BIST 100 PRO BOT\n\n"
+    report = "🔥 DİNAMİK TRADER BOT (PRO)\n\n"
 
     for r in results:
-        stock = r["stock"]
-        score = r["score"]
-        rsi = r["rsi"]
-        price = r["price"]
 
-        signal = classify(score)
-        link = tv_link(stock)
+        s = signal(r["score"])
+        ai = ai_comment(r["rsi"], r["score"])
 
-        report += f"{signal} [{stock}]({link})\n"
-        report += f"💰 {price} | RSI: {rsi} | Skor: {score}\n\n"
+        winrate = backtest(r["df"])
+
+        price = round(r["price"], 2)
+
+        # SL / TP
+        sl = round(price * 0.95, 2)
+        tp = round(price * 1.10, 2)
+
+        # 🔴 TEPEDEN SAT UYARISI
+        top_warning = ""
+        if r["rsi"] > 75 and r["price"] > r["df"]["Close"].rolling(20).mean().iloc[-1]:
+            top_warning = "⚠️ DİKKAT: TEPEYE YAKIN → KAR AL DÜŞÜN"
+
+        report += f"{s} [{r['stock']}]({tv_link(r['stock'])})\n"
+        report += f"💰 Fiyat: {price}\n"
+        report += f"📊 Entry: {round(price*0.95,2)} | Exit: {round(price*1.02,2)} | RSI: {round(r['rsi'],2)}\n"
+        report += f"🎯 SL: {sl} | TP: {tp}\n"
+        report += f"📈 Win Rate: %{winrate}\n"
+        report += f"{ai}\n"
+        if top_warning:
+            report += f"{top_warning}\n"
+
+        report += "\n━━━━━━━━━━━━━━\n\n"
 
     report += "⚠️ Yatırım tavsiyesi değildir."
 
@@ -141,24 +172,15 @@ def build_report(results):
 
 
 # 📲 TELEGRAM
-def send_telegram(text):
-    if not BOT_TOKEN or not CHAT_ID:
-        print("❌ BOT_TOKEN veya CHAT_ID eksik")
-        return
-
+def send(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    data = {
+    requests.post(url, data={
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True
-    }
-
-    try:
-        requests.post(url, data=data)
-    except Exception as e:
-        print(f"❌ TELEGRAM ERROR: {e}")
+    })
 
 
 # 🚀 RUN
@@ -167,26 +189,22 @@ def run():
 
     results = []
 
-    for stock in stocks:
-        res = analyze(stock)
+    for s in stocks:
+        r = analyze(s)
+        if r:
+            results.append(r)
 
-        if res:
-            results.append(res)
-
-    if not results:
-        send_telegram("❌ Veri bulunamadı")
-        return
-
-    # en iyi sinyaller
     results = sorted(results, key=lambda x: x["score"], reverse=True)
 
-    # sadece güçlü sinyaller
-    strong = [r for r in results if r["score"] >= 40]
+    filtered = [r for r in results if r["score"] >= 35]
 
-    # rapor
-    report = build_report(strong[:15])
+    if not filtered:
+        send("❌ Sinyal bulunamadı")
+        return
 
-    send_telegram(report)
+    report = build_report(filtered[:10])
+
+    send(report)
 
 
 if __name__ == "__main__":
