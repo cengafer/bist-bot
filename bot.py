@@ -77,7 +77,7 @@ def analyze(stock):
 
     score = 0
 
-    if last["EMA20"] > last["EMA50"]:
+    if float(last["EMA20"]) > float(last["EMA50"]):
         score += 25
 
     if 45 < last["RSI"] < 60:
