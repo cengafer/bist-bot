@@ -106,6 +106,9 @@ def analyze(stock):
 # RAPOR
 # ======================
 def run():
+    print("TOKEN:", BOT_TOKEN)
+    print("CHAT_ID:", CHAT_ID)
+    
     buy = []
     sell = []
     wait = []
