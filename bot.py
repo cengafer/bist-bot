@@ -66,18 +66,19 @@ def analyze(stock):
         return None
 
     close = df["Close"]
+    volume = df["Volume"]
 
-    # Tek boyuta garanti al
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
 
-    try:
-        df["EMA20"] = ta.trend.ema_indicator(close, 20)
-        df["EMA50"] = ta.trend.ema_indicator(close, 50)
-        df["RSI"] = ta.momentum.rsi(close, 14)
-        df["MACD"] = ta.trend.macd_diff(close)
-    except:
-        return None
+    # İNDİKATÖRLER
+    df["EMA20"] = ta.trend.ema_indicator(close, 20)
+    df["EMA50"] = ta.trend.ema_indicator(close, 50)
+    df["RSI"] = ta.momentum.rsi(close, 14)
+    df["MACD"] = ta.trend.macd_diff(close)
+
+    # OBV
+    df["OBV"] = ta.volume.on_balance_volume(close, volume)
 
     last = df.iloc[-1]
 
@@ -86,29 +87,64 @@ def analyze(stock):
         ema50 = float(last["EMA50"])
         rsi = float(last["RSI"])
         macd = float(last["MACD"])
+        obv = float(last["OBV"])
     except:
         return None
 
+    # ======================
+    # SKOR SİSTEMİ
+    # ======================
     score = 0
 
+    # Trend
     if ema20 > ema50:
         score += 25
+    else:
+        score -= 15
 
-    if 45 < rsi < 60:
-        score += 15
+    # Momentum
+    if 50 < rsi < 65:
+        score += 20
+    elif rsi > 70:
+        score -= 15
 
+    # MACD
     if macd > 0:
         score += 15
+    else:
+        score -= 10
+
+    # OBV (çok önemli)
+    if obv > 0:
+        score += 15
+    else:
+        score -= 10
+
+    # BONUS: aşırı satım fırsatı
+    if rsi < 30:
+        score += 10
 
     return round(score, 2)
+
+# ======================
+# YORUM
+# ======================
+def comment(score):
+    if score >= 70:
+        return "🚀 Güçlü yükseliş + momentum var"
+    elif score >= 60:
+        return "📈 Alım fırsatı oluşuyor"
+    elif score >= 50:
+        return "🟡 İzlenebilir"
+    elif score >= 40:
+        return "⚠️ Zayıf"
+    else:
+        return "📉 Düşüş baskısı"
 
 # ======================
 # RAPOR
 # ======================
 def run():
-    print("TOKEN:", BOT_TOKEN)
-    print("CHAT_ID:", CHAT_ID)
-    
     buy = []
     sell = []
     wait = []
@@ -120,21 +156,50 @@ def run():
             continue
 
         name = stock.replace(".IS", "")
+        cmt = comment(score)
+
+        line = f"🔹 {name} ({score}) - {cmt}"
 
         if score >= 65:
-            buy.append(f"🟢 {name} ({score})")
+            buy.append("🟢 " + line)
         elif score <= 40:
-            sell.append(f"🔴 {name} ({score})")
+            sell.append("🔴 " + line)
         else:
-            wait.append(f"⚪ {name} ({score})")
+            wait.append("⚪ " + line)
 
         time.sleep(random.uniform(1.5, 3))
 
-    message = f"📊 <b>BIST RAPOR</b>\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+    # ======================
+    # GENEL YORUM
+    # ======================
+    if len(buy) > len(sell):
+        market_comment = "📈 Piyasada alım baskısı güçlü"
+    elif len(sell) > len(buy):
+        market_comment = "📉 Satış baskısı artmış"
+    else:
+        market_comment = "⚖️ Piyasa kararsız"
 
-    message += "🟢 AL\n" + ("\n".join(buy) if buy else "Yok") + "\n\n"
-    message += "🔴 SAT\n" + ("\n".join(sell) if sell else "Yok") + "\n\n"
-    message += "⚪ BEKLE\n" + ("\n".join(wait) if wait else "Yok")
+    # ======================
+    # MESAJ
+    # ======================
+    message = f"""
+📊 <b>BIST PRO RAPOR</b>
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+🧠 <b>PİYASA YORUMU</b>
+{market_comment}
+
+🟢 <b>AL</b>
+{chr(10).join(buy) if buy else "Yok"}
+
+🔴 <b>SAT</b>
+{chr(10).join(sell) if sell else "Yok"}
+
+⚪ <b>BEKLE</b>
+{chr(10).join(wait) if wait else "Yok"}
+
+⚠️ <b>Not:</b> Bu sistem teknik analiz bazlıdır, kesinlik içermez.
+"""
 
     send_message(message)
 
