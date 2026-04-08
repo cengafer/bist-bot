@@ -15,11 +15,14 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    })
+    try:
+        requests.post(url, data={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }, timeout=10)
+    except:
+        pass
 
 # ======================
 # HİSSELER
@@ -64,26 +67,37 @@ def analyze(stock):
 
     close = df["Close"]
 
-    # 🔥 FIX: 2D → 1D dönüşüm
+    # Tek boyuta garanti al
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
 
-    df["EMA20"] = ta.trend.ema_indicator(close, 20)
-    df["EMA50"] = ta.trend.ema_indicator(close, 50)
-    df["RSI"] = ta.momentum.rsi(close, 14)
-    df["MACD"] = ta.trend.macd_diff(close)
+    try:
+        df["EMA20"] = ta.trend.ema_indicator(close, 20)
+        df["EMA50"] = ta.trend.ema_indicator(close, 50)
+        df["RSI"] = ta.momentum.rsi(close, 14)
+        df["MACD"] = ta.trend.macd_diff(close)
+    except:
+        return None
 
     last = df.iloc[-1]
 
+    try:
+        ema20 = float(last["EMA20"])
+        ema50 = float(last["EMA50"])
+        rsi = float(last["RSI"])
+        macd = float(last["MACD"])
+    except:
+        return None
+
     score = 0
 
-    if float(last["EMA20"]) > float(last["EMA50"]):
+    if ema20 > ema50:
         score += 25
 
-    if 45 < last["RSI"] < 60:
+    if 45 < rsi < 60:
         score += 15
 
-    if last["MACD"] > 0:
+    if macd > 0:
         score += 15
 
     return round(score, 2)
