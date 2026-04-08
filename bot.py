@@ -68,17 +68,35 @@ def analyze(stock):
     close = df["Close"]
     volume = df["Volume"]
 
+    # Tek boyut garanti
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
 
+    # ======================
     # İNDİKATÖRLER
-    df["EMA20"] = ta.trend.ema_indicator(close, 20)
-    df["EMA50"] = ta.trend.ema_indicator(close, 50)
-    df["RSI"] = ta.momentum.rsi(close, 14)
-    df["MACD"] = ta.trend.macd_diff(close)
+    # ======================
+    try:
+        df["EMA20"] = ta.trend.ema_indicator(close, 20)
+        df["EMA50"] = ta.trend.ema_indicator(close, 50)
+        df["RSI"] = ta.momentum.rsi(close, 14)
+        df["MACD"] = ta.trend.macd_diff(close)
+    except:
+        return None
 
-    # OBV
-    df["OBV"] = ta.volume.on_balance_volume(close, volume)
+    # ======================
+    # MANUEL OBV
+    # ======================
+    obv = [0]
+
+    for i in range(1, len(df)):
+        if close.iloc[i] > close.iloc[i - 1]:
+            obv.append(obv[-1] + volume.iloc[i])
+        elif close.iloc[i] < close.iloc[i - 1]:
+            obv.append(obv[-1] - volume.iloc[i])
+        else:
+            obv.append(obv[-1])
+
+    df["OBV"] = obv
 
     last = df.iloc[-1]
 
@@ -87,7 +105,8 @@ def analyze(stock):
         ema50 = float(last["EMA50"])
         rsi = float(last["RSI"])
         macd = float(last["MACD"])
-        obv = float(last["OBV"])
+        obv_last = float(last["OBV"])
+        obv_prev = float(df["OBV"].iloc[-2])
     except:
         return None
 
@@ -102,7 +121,7 @@ def analyze(stock):
     else:
         score -= 15
 
-    # Momentum
+    # RSI
     if 50 < rsi < 65:
         score += 20
     elif rsi > 70:
@@ -114,13 +133,13 @@ def analyze(stock):
     else:
         score -= 10
 
-    # OBV (çok önemli)
-    if obv > 0:
+    # OBV (çok güçlü sinyal)
+    if obv_last > obv_prev:
         score += 15
     else:
         score -= 10
 
-    # BONUS: aşırı satım fırsatı
+    # Aşırı satım fırsatı
     if rsi < 30:
         score += 10
 
@@ -131,15 +150,15 @@ def analyze(stock):
 # ======================
 def comment(score):
     if score >= 70:
-        return "🚀 Güçlü yükseliş + momentum var"
+        return "🚀 Güçlü yükseliş"
     elif score >= 60:
-        return "📈 Alım fırsatı oluşuyor"
+        return "📈 Alım fırsatı"
     elif score >= 50:
-        return "🟡 İzlenebilir"
+        return "🟡 İzle"
     elif score >= 40:
         return "⚠️ Zayıf"
     else:
-        return "📉 Düşüş baskısı"
+        return "📉 Düşüş"
 
 # ======================
 # RAPOR
@@ -169,24 +188,20 @@ def run():
 
         time.sleep(random.uniform(1.5, 3))
 
-    # ======================
     # GENEL YORUM
-    # ======================
     if len(buy) > len(sell):
-        market_comment = "📈 Piyasada alım baskısı güçlü"
+        market_comment = "📈 Alım baskısı güçlü"
     elif len(sell) > len(buy):
-        market_comment = "📉 Satış baskısı artmış"
+        market_comment = "📉 Satış baskısı güçlü"
     else:
         market_comment = "⚖️ Piyasa kararsız"
 
-    # ======================
     # MESAJ
-    # ======================
     message = f"""
 📊 <b>BIST PRO RAPOR</b>
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
-🧠 <b>PİYASA YORUMU</b>
+🧠 <b>PİYASA</b>
 {market_comment}
 
 🟢 <b>AL</b>
@@ -198,13 +213,13 @@ def run():
 ⚪ <b>BEKLE</b>
 {chr(10).join(wait) if wait else "Yok"}
 
-⚠️ <b>Not:</b> Bu sistem teknik analiz bazlıdır, kesinlik içermez.
+⚠️ <b>Yatırım tavsiyesi değildir</b>
 """
 
     send_message(message)
 
 # ======================
-# ÇALIŞTIR
+# START
 # ======================
 if __name__ == "__main__":
     run()
