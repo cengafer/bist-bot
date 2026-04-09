@@ -51,7 +51,7 @@ def calculate_win_rate(df):
 
 
 # =========================
-# SYMBOLS
+# LOAD SYMBOLS
 # =========================
 def load_symbols():
     with open("bist100.txt") as f:
@@ -89,19 +89,20 @@ def analyze(symbol):
             signal = "🟡 BEKLE"
 
         # =========================
-        # ENTRY (CLEAN)
+        # ENTRY
         # =========================
-        entry = round(price, 2)
+        entry = round(price, 1)   # ✅ SADECE BURASI DEĞİŞTİ
         sl = round(price * 0.97, 2)
         tp = round(price * 1.05, 2)
 
         # =========================
-        # FORMAT (GÖZ YORMAZ)
+        # FORMAT
         # =========================
         text = f"""{signal} {symbol.replace('.IS','')}
 
-💰 Fiyat: {price}
+💰 Fiyat: {round(price,1)}
 📊 RSI: {round(rsi_val,2)}
+
 🎯 Entry: {entry}
 🛑 SL: {sl}
 🎯 TP: {tp}
@@ -133,13 +134,10 @@ def send_message(msg):
 def main():
     symbols = load_symbols()
 
-    al = []
-    sat = []
-    bekle = []
+    al, sat, bekle = [], [], []
 
     for s in symbols:
         res = analyze(s)
-
         if res is None:
             continue
 
@@ -152,30 +150,18 @@ def main():
         else:
             bekle.append(text)
 
-    # =========================
-    # DATE HEADER
-    # =========================
     today = datetime.now().strftime("%d.%m.%Y")
 
     report = f"🔥 AKILLI TRADER BOT - {today}\n"
 
-    # =========================
-    # AL
-    # =========================
     if al:
         report += "\n🟢 AL\n━━━━━━━━━━━━━━\n"
         report += "\n".join(al)
 
-    # =========================
-    # SAT
-    # =========================
     if sat:
         report += "\n🔴 SAT\n━━━━━━━━━━━━━━\n"
         report += "\n".join(sat)
 
-    # =========================
-    # BEKLE
-    # =========================
     if bekle:
         report += "\n🟡 BEKLE\n━━━━━━━━━━━━━━\n"
         report += "\n".join(bekle)
@@ -187,8 +173,5 @@ def main():
     print(report)
 
 
-# =========================
-# RUN
-# =========================
 if __name__ == "__main__":
     main()
