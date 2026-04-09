@@ -89,24 +89,22 @@ def analyze(symbol):
             signal = "🟡 BEKLE"
 
         # =========================
-        # ENTRY
+        # FORMAT (KESİN)
         # =========================
-        entry = round(price, 1)   # ✅ SADECE BURASI DEĞİŞTİ
-        sl = round(price * 0.97, 2)
-        tp = round(price * 1.05, 2)
+        price_f = f"{price:.2f}"
+        rsi_f = f"{rsi_val:.2f}"
+        entry = f"{price:.2f}"   # aynı format
+        sl = f"{price*0.97:.2f}"
+        tp = f"{price*1.05:.2f}"
 
-        # =========================
-        # FORMAT
-        # =========================
         text = f"""{signal} {symbol.replace('.IS','')}
 
-💰 Fiyat: {round(price,1)}
-📊 RSI: {round(rsi_val,2)}
-
+💰 Fiyat: {price_f}
+📊 RSI:{rsi_f}
 🎯 Entry: {entry}
 🛑 SL: {sl}
 🎯 TP: {tp}
-📈 Win Rate: %{round(win_rate,2)}
+📈 Win Rate: %{win_rate:.2f}
 """
 
         return signal, text
