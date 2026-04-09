@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import requests
 import logging
+import time
 
 # LOG KAPAT
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -32,7 +33,7 @@ def rsi(series, period=14):
 def backtest(close):
     returns = close.pct_change().dropna()
     wins = returns[returns > 0]
-    return round((len(wins) / len(returns)) * 100, 2) if len(returns) > 0 else 0
+    return round((len(wins) / len(returns)) * 100, 2) if len(returns) else 0
 
 # =========================
 # ANALİZ
@@ -41,61 +42,44 @@ def analyze(symbol):
     try:
         df = yf.download(symbol, period="1y", interval="1d", progress=False)
 
-        # ❌ HATALI / DELISTED FİLTRE
         if df.empty or "Close" not in df:
             return None
 
         close = df["Close"].squeeze().dropna()
 
-        # ❌ 2D DATA HATASI ÇÖZÜMÜ
         if isinstance(close, pd.DataFrame):
             close = close.iloc[:, 0]
 
         if len(close) < 50:
             return None
 
-        # =========================
-        # GÜNCEL VERİ
-        # =========================
         price = float(close.iloc[-1])
         rsi_val = float(rsi(close).iloc[-1])
         sma20 = float(close.rolling(20).mean().iloc[-1])
         sma50 = float(close.rolling(50).mean().iloc[-1])
 
         high_50 = float(close.tail(50).max())
-        low_50 = float(close.tail(50).min())
-
         winrate = backtest(close)
 
-        # =========================
-        # ENTRY (ANLIK)
-        # =========================
         entry = price
         sl = round(price * 0.95, 2)
         tp = round(price * 1.10, 2)
 
-        # =========================
-        # SİNYAL MOTORU (YARI AGRESİF)
-        # =========================
         signal = "🟡 İZLE"
         comment = "⚖️ Nötr"
 
-        # 🔥 GÜÇLÜ AL
         if rsi_val > 60 and price > sma20 and price > sma50:
             signal = "🔥 GÜÇLÜ AL"
             comment = "📈 Güçlü trend"
 
-        # 🟢 AL
         elif rsi_val > 52 and price > sma20:
             signal = "🟢 AL"
             comment = "🚀 Momentum başladı"
 
-        # 🔴 ZİRVE SAT
         if price >= high_50 * 0.97:
             signal = "🔴 SAT (ZİRVE)"
             comment = "⚠️ Tepeden satış riski"
 
-        # 🔴 DÜŞÜŞ SAT
         elif price < sma50 and rsi_val < 45:
             signal = "🔴 SAT"
             comment = "📉 Düşüş trendi"
@@ -110,15 +94,33 @@ def analyze(symbol):
 
         return signal, text
 
-    except:
+    except Exception as e:
+        print("ANALYZE ERROR:", symbol, e)
         return None
 
 # =========================
-# TELEGRAM
+# TELEGRAM (FIXED)
 # =========================
 def send(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+
+    # 🔥 mesaj çok uzunsa parçala
+    chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
+
+    for part in chunks:
+        try:
+            r = requests.post(url, data={
+                "chat_id": CHAT_ID,
+                "text": part
+            })
+
+            print("STATUS:", r.status_code)
+            print("RESPONSE:", r.text)
+
+            time.sleep(1)
+
+        except Exception as e:
+            print("TELEGRAM ERROR:", e)
 
 # =========================
 # RUN
@@ -129,11 +131,11 @@ def run():
     strong, buys, sells, watch = [], [], [], []
 
     for s in symbols:
-        result = analyze(s)
-        if result is None:
+        r = analyze(s)
+        if r is None:
             continue
 
-        signal, text = result
+        signal, text = r
 
         if "🔥" in signal:
             strong.append(text)
@@ -163,13 +165,14 @@ def run():
         report += "\n\n━━━━━━━━━━━━━━\n\n".join(watch)
 
     if not strong and not buys and not sells:
-        report = "⚠️ Bugün sinyal bulunamadı"
+        report = "⚠️ Bugün sinyal yok"
 
     send(report)
     print(report)
 
 # =========================
-# START
+# TEST (İLK ÇALIŞTIRMADA)
 # =========================
 if __name__ == "__main__":
+    send("🚀 BOT TEST MESAJI")
     run()
