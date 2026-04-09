@@ -2,9 +2,6 @@ import yfinance as yf
 import pandas as pd
 import requests
 
-# =========================
-# TELEGRAM
-# =========================
 BOT_TOKEN = "TOKEN"
 CHAT_ID = "CHAT_ID"
 
@@ -13,10 +10,7 @@ CHAT_ID = "CHAT_ID"
 # =========================
 def load_symbols():
     with open("bist100.txt", "r") as f:
-        lines = f.read().splitlines()
-
-    # .IS ekle
-    return [x.strip() + ".IS" for x in lines if x.strip()]
+        return [x.strip() + ".IS" for x in f if x.strip()]
 
 # =========================
 # RSI
@@ -25,9 +19,7 @@ def rsi(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss
+    rs = gain.rolling(period).mean() / loss.rolling(period).mean()
     return 100 - (100 / (1 + rs))
 
 # =========================
@@ -36,63 +28,69 @@ def rsi(series, period=14):
 def backtest(close):
     returns = close.pct_change().dropna()
     wins = returns[returns > 0]
-    if len(returns) == 0:
-        return 0
-    return round((len(wins) / len(returns)) * 100, 2)
+    return round((len(wins) / len(returns)) * 100, 2) if len(returns) else 0
 
 # =========================
 # ANALİZ
 # =========================
 def analyze(symbol):
     try:
-        df = yf.download(symbol, period="6mo", interval="1d", progress=False)
+        df = yf.download(symbol, period="1y", interval="1d", progress=False)
 
         if df.empty or "Close" not in df:
             return None
 
-        close = df["Close"].squeeze()
+        close = df["Close"].squeeze().dropna()
+
+        if len(close) < 50:
+            return None
 
         price = float(close.iloc[-1])
         rsi_val = float(rsi(close).iloc[-1])
         sma20 = close.rolling(20).mean().iloc[-1]
         sma50 = close.rolling(50).mean().iloc[-1]
-
         high_50 = close.tail(50).max()
+        low_50 = close.tail(50).min()
 
         winrate = backtest(close)
 
-        # ENTRY FIX
-        entry = round(price * 0.98, 2)
+        # =========================
+        # ENTRY (GEÇMİŞ YOK!)
+        # =========================
+        entry = price  # direkt current
         sl = round(price * 0.95, 2)
         tp = round(price * 1.10, 2)
 
-        if price > entry:
-            entry_text = f"{price} (breakout)"
-        else:
-            entry_text = f"{entry}"
-
         # =========================
-        # SİNYAL MOTORU
+        # SİNYAL MOTORU (YARI AGRESİF)
         # =========================
         signal = "🟡 İZLE"
-        comment = "⚖️ Kararsız"
+        comment = "⚖️ Nötr"
 
-        if (rsi_val > 50 and price > sma20 and price > sma50):
+        # 🚀 AL
+        if rsi_val > 52 and price > sma20:
             signal = "🟢 AL"
-            comment = "🚀 Güçlü trend"
+            comment = "🚀 Momentum başladı"
 
-        if price >= high_50 * 0.98:
+        # 💥 GÜÇLÜ AL
+        if rsi_val > 60 and price > sma20 and price > sma50:
+            signal = "🔥 GÜÇLÜ AL"
+            comment = "📈 Trend güçlü"
+
+        # 🔴 ZİRVE SAT
+        if price >= high_50 * 0.97:
             signal = "🔴 SAT (ZİRVE)"
-            comment = "⚠️ Zirve → kar satışı"
+            comment = "⚠️ Tepeden satılabilir"
 
+        # 📉 DÜŞÜŞ
         if price < sma50 and rsi_val < 45:
             signal = "🔴 SAT"
-            comment = "📉 Düşüş trendi"
+            comment = "📉 Trend aşağı"
 
         text = f"""{signal} {symbol.replace('.IS','')}
 💰 {round(price,2)}
 📊 RSI: {round(rsi_val,2)}
-🎯 Entry: {entry_text}
+🎯 Entry: {round(entry,2)}
 🛑 SL: {sl} | 🎯 TP: {tp}
 📈 Win Rate: %{winrate}
 {comment}"""
@@ -115,7 +113,7 @@ def send(msg):
 def run():
     symbols = load_symbols()
 
-    buys, sells, watch = [], [], []
+    buys, strong, sells, watch = [], [], [], []
 
     for s in symbols:
         r = analyze(s)
@@ -124,7 +122,9 @@ def run():
 
         signal, text = r
 
-        if "🟢" in signal:
+        if "🔥" in signal:
+            strong.append(text)
+        elif "🟢" in signal:
             buys.append(text)
         elif "🔴" in signal:
             sells.append(text)
@@ -132,6 +132,10 @@ def run():
             watch.append(text)
 
     report = "🔥 AKILLI TRADER BOT\n\n"
+
+    if strong:
+        report += "🔥 GÜÇLÜ AL\n━━━━━━━━━━━━━━\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(strong) + "\n\n"
 
     if buys:
         report += "🟢 AL\n━━━━━━━━━━━━━━\n\n"
@@ -145,8 +149,8 @@ def run():
         report += "🟡 İZLE\n━━━━━━━━━━━━━━\n\n"
         report += "\n\n━━━━━━━━━━━━━━\n\n".join(watch)
 
-    if not buys and not sells:
-        report = "⚠️ Sinyal yok (piyasa yatay)"
+    if not strong and not buys and not sells:
+        report = "⚠️ Bugün güçlü sinyal yok"
 
     send(report)
     print(report)
