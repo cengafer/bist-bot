@@ -1,7 +1,7 @@
 import os
 import yfinance as yf
 import requests
-import pandas as pd
+from datetime import datetime
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -23,18 +23,17 @@ def rsi(series, period=14):
 
 
 # =========================
-# WIN RATE (BACKTEST)
+# WIN RATE
 # =========================
-def calculate_win_rate(df, lookback=15):
+def calculate_win_rate(df):
     closes = df["Close"].dropna().values
 
     wins = 0
     total = 0
 
-    for i in range(len(closes) - lookback - 1):
+    for i in range(len(closes) - 15):
         entry = closes[i]
-
-        future = closes[i+1:i+lookback]
+        future = closes[i+1:i+15]
 
         tp = entry * 1.05
         sl = entry * 0.97
@@ -48,18 +47,15 @@ def calculate_win_rate(df, lookback=15):
 
         total += 1
 
-    if total == 0:
-        return 0
-
-    return (wins / total) * 100
+    return (wins / total) * 100 if total > 0 else 0
 
 
 # =========================
-# LOAD SYMBOLS
+# SYMBOLS
 # =========================
 def load_symbols():
-    with open("bist100.txt", "r") as f:
-        return [line.strip().upper() + ".IS" for line in f if line.strip()]
+    with open("bist100.txt") as f:
+        return [x.strip().upper() + ".IS" for x in f if x.strip()]
 
 
 # =========================
@@ -76,51 +72,45 @@ def analyze(symbol):
 
         price = float(close.iloc[-1])
         rsi_val = float(rsi(close).iloc[-1])
+        win_rate = calculate_win_rate(df)
 
         high_50 = float(close.tail(50).max())
-        low_50 = float(close.tail(50).min())
-
-        win_rate = calculate_win_rate(df)
 
         # =========================
         # SIGNAL
         # =========================
         if price >= high_50 * 0.98:
             signal = "🔴 SAT (ZİRVE)"
-
         elif rsi_val < 40:
             signal = "🔴 SAT"
-
         elif rsi_val > 60:
             signal = "🟢 AL"
-
         else:
             signal = "🟡 BEKLE"
 
         # =========================
-        # ENTRY FIX (NO BIAS)
+        # ENTRY (CLEAN)
         # =========================
         entry = round(price, 2)
         sl = round(price * 0.97, 2)
         tp = round(price * 1.05, 2)
 
-        text = f"""
-{signal} {symbol.replace('.IS','')}
+        # =========================
+        # FORMAT (GÖZ YORMAZ)
+        # =========================
+        text = f"""{signal} {symbol.replace('.IS','')}
 
 💰 Fiyat: {price}
 📊 RSI: {round(rsi_val,2)}
-
-📈 Win Rate: %{round(win_rate,2)}
-
 🎯 Entry: {entry}
 🛑 SL: {sl}
 🎯 TP: {tp}
+📈 Win Rate: %{round(win_rate,2)}
 """
 
-        return text
+        return signal, text
 
-    except Exception as e:
-        print("ERROR:", symbol, e)
+    except:
         return None
 
 
@@ -131,16 +121,10 @@ def send_message(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     for i in range(0, len(msg), 3500):
-        chunk = msg[i:i+3500]
-
-        try:
-            res = requests.post(url, data={
-                "chat_id": CHAT_ID,
-                "text": chunk
-            })
-            print(res.status_code, res.text)
-        except Exception as e:
-            print("TELEGRAM ERROR:", e)
+        requests.post(url, data={
+            "chat_id": CHAT_ID,
+            "text": msg[i:i+3500]
+        })
 
 
 # =========================
@@ -154,30 +138,49 @@ def main():
     bekle = []
 
     for s in symbols:
-        result = analyze(s)
+        res = analyze(s)
 
-        if result is None:
+        if res is None:
             continue
 
-        if "AL" in result:
-            al.append(result)
-        elif "SAT" in result:
-            sat.append(result)
+        signal, text = res
+
+        if "AL" in signal:
+            al.append(text)
+        elif "SAT" in signal:
+            sat.append(text)
         else:
-            bekle.append(result)
+            bekle.append(text)
 
-    report = "🔥 AKILLI TRADER BOT\n\n"
+    # =========================
+    # DATE HEADER
+    # =========================
+    today = datetime.now().strftime("%d.%m.%Y")
 
+    report = f"🔥 AKILLI TRADER BOT - {today}\n"
+
+    # =========================
+    # AL
+    # =========================
     if al:
-        report += "🟢 AL\n━━━━━━━━━━━━━━\n\n" + "\n\n".join(al) + "\n\n"
+        report += "\n🟢 AL\n━━━━━━━━━━━━━━\n"
+        report += "\n".join(al)
 
+    # =========================
+    # SAT
+    # =========================
     if sat:
-        report += "🔴 SAT\n━━━━━━━━━━━━━━\n\n" + "\n\n".join(sat) + "\n\n"
+        report += "\n🔴 SAT\n━━━━━━━━━━━━━━\n"
+        report += "\n".join(sat)
 
+    # =========================
+    # BEKLE
+    # =========================
     if bekle:
-        report += "🟡 BEKLE\n━━━━━━━━━━━━━━\n\n" + "\n\n".join(bekle)
+        report += "\n🟡 BEKLE\n━━━━━━━━━━━━━━\n"
+        report += "\n".join(bekle)
 
-    if not al and not sat:
+    if not al and not sat and not bekle:
         report = "⚠️ Sinyal yok"
 
     send_message(report)
