@@ -1,172 +1,178 @@
-import os
-import requests
-import pandas as pd
 import yfinance as yf
-from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator
+import pandas as pd
+import numpy as np
+import requests
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# =========================
+# TELEGRAM AYARLARI
+# =========================
+BOT_TOKEN = "TOKEN_BURAYA"
+CHAT_ID = "CHAT_ID_BURAYA"
 
+# =========================
+# HİSSE LİSTESİ (temiz)
+# =========================
+symbols = [
+    "ASELS.IS","BIMAS.IS","THYAO.IS","KCHOL.IS","EREGL.IS",
+    "TUPRS.IS","PETKM.IS","KRDMD.IS","ENKAI.IS","SAHOL.IS",
+    "AKBNK.IS","GARAN.IS","YKBNK.IS","ISCTR.IS","SISE.IS",
+    "HEKTS.IS","ODAS.IS","METRO.IS","GLYHO.IS","CIMSA.IS"
+]
 
-def load_stocks():
-    with open("bist100.txt") as f:
-        return [x.strip().upper() for x in f.readlines() if x.strip()]
+# =========================
+# RSI
+# =========================
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
+# =========================
+# BACKTEST
+# =========================
+def backtest(close):
+    returns = close.pct_change()
+    wins = returns[returns > 0]
+    total = returns.dropna()
 
-# 📊 DAHA GÜNCEL VERİ
-def get_data(stock):
+    if len(total) == 0:
+        return 0
+
+    return round((len(wins) / len(total)) * 100, 2)
+
+# =========================
+# ANALİZ
+# =========================
+def analyze(symbol):
     try:
-        ticker = yf.Ticker(f"{stock}.IS")
-        df = ticker.history(period="6mo", interval="1d")
+        df = yf.download(symbol, period="6mo", interval="1d", progress=False)
 
-        if df is None or df.empty:
+        if df.empty or "Close" not in df:
             return None
 
-        df = df[["Close"]].dropna()
-        return df
+        # 1D FIX
+        close = df["Close"].squeeze()
 
-    except:
-        return None
+        price = float(close.iloc[-1])
+        rsi_val = float(rsi(close).iloc[-1])
+        sma20 = close.rolling(20).mean().iloc[-1]
+        sma50 = close.rolling(50).mean().iloc[-1]
 
+        high_50 = close.tail(50).max()
+        low_50 = close.tail(50).min()
 
-# 🧠 GERÇEK ANALİZ
-def analyze(stock):
+        winrate = backtest(close)
 
-    df = get_data(stock)
-    if df is None:
-        return None
+        # =========================
+        # ENTRY / SL / TP
+        # =========================
+        entry = round(price * 0.98, 2)
+        sl = round(price * 0.95, 2)
+        tp = round(price * 1.10, 2)
 
-    try:
-        close = df["Close"]
-
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-
-        close = close.astype(float)
-
-        price = close.iloc[-1]
-
-        rsi = RSIIndicator(close).rsi().iloc[-1]
-        ema20 = EMAIndicator(close, 20).ema_indicator().iloc[-1]
-        ema50 = EMAIndicator(close, 50).ema_indicator().iloc[-1]
-
-        # 🔥 ZİRVE KONTROLÜ
-        high_90 = close[-90:].max()
-        near_top = price >= high_90 * 0.97
-
-        score = 0
-
-        if rsi < 35:
-            score += 40
-        elif rsi > 70:
-            score -= 30
-
-        if price > ema20 > ema50:
-            score += 40
-        elif price < ema20 < ema50:
-            score -= 40
-
-        if price > close.iloc[-3]:
-            score += 20
+        # breakout fix
+        if price > entry:
+            entry_text = f"{price} (breakout)"
         else:
-            score -= 10
+            entry_text = f"{entry}"
 
-        return {
-            "stock": stock,
-            "price": float(price),
-            "rsi": float(rsi),
-            "score": score,
-            "near_top": near_top,
-            "high_90": high_90,
-            "df": df
-        }
+        # =========================
+        # KARAR MOTORU (YARI AGRESİF)
+        # =========================
+        signal = "🟡 İZLE"
+        comment = "⚖️ Kararsız yapı"
+
+        # 🟢 AL
+        if (rsi_val > 50 and price > sma20 and price > sma50):
+            signal = "🟢 AL"
+            comment = "🚀 Trend güçlü, momentum yukarı"
+
+        # 🔴 SAT (zirve)
+        if price >= high_50 * 0.98:
+            signal = "🔴 SAT (ZİRVE)"
+            comment = "⚠️ Zirveye yakın → kar satışı riski"
+
+        # 🔴 SAT (düşüş)
+        if price < sma50 and rsi_val < 45:
+            signal = "🔴 SAT"
+            comment = "📉 Trend aşağı → zayıf yapı"
+
+        # =========================
+        # RAPOR
+        # =========================
+        text = f"""{signal} {symbol.replace('.IS','')}
+💰 Fiyat: {round(price,2)}
+📊 RSI: {round(rsi_val,2)}
+🎯 Entry: {entry_text}
+🛑 SL: {sl} | 🎯 TP: {tp}
+📈 Win Rate: %{winrate}
+{comment}"""
+
+        return signal, text
 
     except:
         return None
 
 
-# 🎯 GERÇEK SİNYAL
-def signal(r):
-
-    if r["near_top"]:
-        return "🔴 SAT (ZİRVE)"
-
-    if r["score"] >= 60:
-        return "🟢 AL"
-    elif r["score"] >= 30:
-        return "🟡 TAKİP"
-    elif r["score"] >= 0:
-        return "⚪ BEKLE"
-    else:
-        return "🔴 SAT"
-
-
-# 🎯 AKILLI ENTRY
-def entry_exit(r):
-
-    price = r["price"]
-
-    if r["near_top"]:
-        return "-", "-", price * 0.95, price * 0.90
-
-    entry = round(price * 0.98, 2)
-    exit_p = round(price * 1.04, 2)
-
-    sl = round(price * 0.95, 2)
-    tp = round(price * 1.10, 2)
-
-    return entry, exit_p, sl, tp
-
-
-# 📊 RAPOR
-def build(results):
-
-    txt = "🔥 AKILLI TRADER BOT\n\n"
-
-    for r in results:
-
-        s = signal(r)
-        entry, exit_p, sl, tp = entry_exit(r)
-
-        txt += f"{s} {r['stock']}\n"
-        txt += f"💰 Fiyat: {round(r['price'],2)}\n"
-        txt += f"📊 RSI: {round(r['rsi'],2)}\n"
-        txt += f"🎯 Entry: {entry} | Exit: {exit_p}\n"
-        txt += f"🛑 SL: {round(sl,2)} | 🎯 TP: {round(tp,2)}\n"
-
-        if r["near_top"]:
-            txt += "⚠️ Tarihi zirveye yakın → kar satışı riski\n"
-
-        txt += "\n━━━━━━━━━━━━━━\n\n"
-
-    return txt
-
-
-def send(msg):
+# =========================
+# TELEGRAM GÖNDER
+# =========================
+def send_telegram(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 
+# =========================
+# ANA ÇALIŞMA
+# =========================
 def run():
+    buys = []
+    sells = []
+    watch = []
 
-    stocks = load_stocks()
+    for s in symbols:
+        result = analyze(s)
+        if result is None:
+            continue
 
-    results = []
+        signal, text = result
 
-    for s in stocks:
-        r = analyze(s)
-        if r:
-            results.append(r)
+        if "🟢" in signal:
+            buys.append(text)
+        elif "🔴" in signal:
+            sells.append(text)
+        else:
+            watch.append(text)
 
-    if not results:
-        send("❌ Veri yok")
-        return
+    report = "🔥 AKILLI TRADER BOT\n\n"
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:10]
+    if buys:
+        report += "🟢 AL FIRSATLARI\n━━━━━━━━━━━━━━\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(buys)
+        report += "\n\n"
 
-    send(build(results))
+    if sells:
+        report += "🔴 SAT / KAR AL\n━━━━━━━━━━━━━━\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(sells)
+        report += "\n\n"
+
+    if watch:
+        report += "🟡 İZLE\n━━━━━━━━━━━━━━\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(watch)
+
+    if not buys and not sells:
+        report = "⚠️ Bugün güçlü sinyal yok (piyasa yatay)"
+
+    send_telegram(report)
+    print(report)
 
 
+# =========================
+# ÇALIŞTIR
+# =========================
 if __name__ == "__main__":
     run()
