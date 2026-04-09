@@ -1,168 +1,167 @@
 import os
-import yfinance as yf
 import requests
+import pandas as pd
+import numpy as np
+import ta
+import time
 from datetime import datetime
 
+# =========================
+# TELEGRAM AYARLARI
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 # =========================
-# RSI (WILDER - DOĞRU)
-# =========================
-def rsi(series, period=14):
-    delta = series.diff()
-
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-
-    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
-
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
-# =========================
-# WIN RATE
-# =========================
-def calculate_win_rate(df):
-    closes = df["Close"].dropna().values
-
-    wins = 0
-    total = 0
-
-    for i in range(len(closes) - 15):
-        entry = closes[i]
-        future = closes[i+1:i+15]
-
-        tp = entry * 1.05
-        sl = entry * 0.97
-
-        for f in future:
-            if f >= tp:
-                wins += 1
-                break
-            if f <= sl:
-                break
-
-        total += 1
-
-    return (wins / total) * 100 if total > 0 else 0
-
-
-# =========================
-# SYMBOLS
+# HİSSE LİSTESİ
 # =========================
 def load_symbols():
-    with open("bist100.txt") as f:
-        return [x.strip().upper() + ".IS" for x in f if x.strip()]
-
+    with open("bist100.txt", "r") as f:
+        return [x.strip() for x in f.readlines() if x.strip()]
 
 # =========================
-# ANALYZE
+# VERİ ÇEKME (ÖRNEK YAHOO)
 # =========================
-def analyze(symbol):
+def get_data(symbol):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.IS"
+    r = requests.get(url).json()
+
     try:
-        df = yf.download(symbol, period="6mo", interval="1d", progress=False)
-
-        if df is None or df.empty or len(df) < 50:
-            return None
-
-        close = df["Close"].dropna()
-
-        price = float(close.iloc[-1])
-        rsi_val = float(rsi(close).iloc[-1])
-        win_rate = calculate_win_rate(df)
-
-        high_50 = float(close.tail(50).max())
-
-        # =========================
-        # SIGNAL (BEKLE YOK)
-        # =========================
-        if price >= high_50 * 0.98:
-            signal = "🔴 SAT (ZİRVE)"
-        elif rsi_val < 40:
-            signal = "🔴 SAT"
-        else:
-            signal = "🟢 AL"
-
-        # =========================
-        # FORMAT
-        # =========================
-        price_f = f"{price:.2f}"
-        rsi_f = f"{rsi_val:.2f}"
-        entry = f"{price:.2f}"
-        sl = f"{price*0.97:.2f}"
-        tp = f"{price*1.05:.2f}"
-
-        text = f"""{signal} {symbol.replace('.IS','')}
-
-💰 Fiyat: {price_f}
-📊 RSI:{rsi_f}
-🎯 Entry: {entry}
-🛑 SL: {sl}
-🎯 TP: {tp}
-📈 Win Rate: %{win_rate:.2f}
-"""
-
-        return signal, text
-
+        closes = r["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        df = pd.DataFrame({"close": closes})
+        return df.dropna()
     except:
         return None
 
+# =========================
+# RSI HESAPLA
+# =========================
+def calculate_rsi(df):
+    return ta.momentum.RSIIndicator(df["close"], window=14).rsi().iloc[-1]
 
 # =========================
-# TELEGRAM
+# SQUEEZE MOMENTUM
 # =========================
-def send_message(msg):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def squeeze_momentum(df):
+    bb = ta.volatility.BollingerBands(df["close"])
+    width = bb.bollinger_hband() - bb.bollinger_lband()
+    return width.iloc[-1]
 
-    for i in range(0, len(msg), 3500):
-        requests.post(url, data={
-            "chat_id": CHAT_ID,
-            "text": msg[i:i+3500]
-        })
+# =========================
+# WIN RATE BACKTEST
+# =========================
+def backtest(df):
+    win = 0
+    total = 0
 
+    for i in range(20, len(df)-1):
+        entry = df["close"].iloc[i]
+        future = df["close"].iloc[i+1:i+6]
+
+        tp = entry * 1.03
+        sl = entry * 0.98
+
+        if (future >= tp).any():
+            win += 1
+        elif (future <= sl).any():
+            pass
+
+        total += 1
+
+    if total == 0:
+        return 0
+
+    return (win / total) * 100
+
+# =========================
+# SİNYAL ÜRET
+# =========================
+def analyze(symbol):
+    df = get_data(symbol)
+    if df is None or len(df) < 50:
+        return None
+
+    price = round(df["close"].iloc[-1], 2)
+    rsi = round(calculate_rsi(df), 2)
+    winrate = round(backtest(df), 2)
+    squeeze = squeeze_momentum(df)
+
+    # ❌ FİLTRELER
+    if rsi > 68:
+        return None
+
+    if squeeze < 0.5:
+        return None
+
+    if winrate < 50:
+        return None
+
+    # 🎯 LEVELS
+    sl = round(price * 0.97, 2)
+    tp = round(price * 1.05, 2)
+
+    return {
+        "symbol": symbol,
+        "price": price,
+        "rsi": rsi,
+        "sl": sl,
+        "tp": tp,
+        "winrate": winrate
+    }
+
+# =========================
+# RAPOR OLUŞTUR
+# =========================
+def create_report(results):
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    msg = f"🔥 AKILLI TRADER BOT - {today}\n\n"
+
+    if not results:
+        msg += "❌ SİNYAL YOK\n"
+        return msg
+
+    msg += "🟢 AL SİNYALLERİ\n━━━━━━━━━━━━━━\n"
+
+    for r in results:
+        msg += f"""
+🟢 AL {r['symbol']}
+
+💰 Fiyat:{r['price']}
+📊 RSI:{r['rsi']}
+🎯 Entry:{r['price']}
+🛑 SL:{r['sl']}
+🎯 TP:{r['tp']}
+📈 Win Rate:%{r['winrate']}
+
+"""
+
+    return msg
 
 # =========================
 # MAIN
 # =========================
 def main():
     symbols = load_symbols()
-
-    al, sat = [], []
+    results = []
 
     for s in symbols:
-        res = analyze(s)
-        if res is None:
+        try:
+            res = analyze(s)
+            if res:
+                results.append(res)
+        except:
             continue
 
-        signal, text = res
+    msg = create_report(results)
+    send_telegram(msg)
 
-        if "AL" in signal:
-            al.append(text)
-        elif "SAT" in signal:
-            sat.append(text)
-
-    today = datetime.now().strftime("%d.%m.%Y")
-
-    report = f"🔥 AKILLI TRADER BOT - {today}\n"
-
-    if al:
-        report += "\n🟢 AL\n━━━━━━━━━━━━━━\n"
-        report += "\n".join(al)
-
-    if sat:
-        report += "\n🔴 SAT\n━━━━━━━━━━━━━━\n"
-        report += "\n".join(sat)
-
-    if not al and not sat:
-        report = "⚠️ Sinyal yok"
-
-    send_message(report)
-    print(report)
-
-
+# =========================
+# ÇALIŞTIR
+# =========================
 if __name__ == "__main__":
     main()
