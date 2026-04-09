@@ -8,15 +8,16 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 
 # =========================
-# RSI
+# RSI (WILDER - DOĞRU)
 # =========================
 def rsi(series, period=14):
     delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
 
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
 
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
@@ -51,7 +52,7 @@ def calculate_win_rate(df):
 
 
 # =========================
-# LOAD SYMBOLS
+# SYMBOLS
 # =========================
 def load_symbols():
     with open("bist100.txt") as f:
@@ -77,23 +78,21 @@ def analyze(symbol):
         high_50 = float(close.tail(50).max())
 
         # =========================
-        # SIGNAL
+        # SIGNAL (BEKLE YOK)
         # =========================
         if price >= high_50 * 0.98:
             signal = "🔴 SAT (ZİRVE)"
         elif rsi_val < 40:
             signal = "🔴 SAT"
-        elif rsi_val > 60:
-            signal = "🟢 AL"
         else:
-            signal = "🟡 BEKLE"
+            signal = "🟢 AL"
 
         # =========================
-        # FORMAT (KESİN)
+        # FORMAT
         # =========================
         price_f = f"{price:.2f}"
         rsi_f = f"{rsi_val:.2f}"
-        entry = f"{price:.2f}"   # aynı format
+        entry = f"{price:.2f}"
         sl = f"{price*0.97:.2f}"
         tp = f"{price*1.05:.2f}"
 
@@ -132,7 +131,7 @@ def send_message(msg):
 def main():
     symbols = load_symbols()
 
-    al, sat, bekle = [], [], []
+    al, sat = [], []
 
     for s in symbols:
         res = analyze(s)
@@ -145,8 +144,6 @@ def main():
             al.append(text)
         elif "SAT" in signal:
             sat.append(text)
-        else:
-            bekle.append(text)
 
     today = datetime.now().strftime("%d.%m.%Y")
 
@@ -160,11 +157,7 @@ def main():
         report += "\n🔴 SAT\n━━━━━━━━━━━━━━\n"
         report += "\n".join(sat)
 
-    if bekle:
-        report += "\n🟡 BEKLE\n━━━━━━━━━━━━━━\n"
-        report += "\n".join(bekle)
-
-    if not al and not sat and not bekle:
+    if not al and not sat:
         report = "⚠️ Sinyal yok"
 
     send_message(report)
