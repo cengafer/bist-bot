@@ -1,17 +1,17 @@
+import os
 import yfinance as yf
 import pandas as pd
 import requests
-import logging
 import time
 
-# LOG KAPAT
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
-
-BOT_TOKEN = "TOKEN"
-CHAT_ID = "CHAT_ID"
+# =========================
+# ENV (GitHub Secrets)
+# =========================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 # =========================
-# TXT OKU
+# SYMBOLS
 # =========================
 def load_symbols():
     with open("bist100.txt", "r") as f:
@@ -24,155 +24,167 @@ def rsi(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    rs = gain.rolling(period).mean() / loss.rolling(period).mean()
+
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+
+    rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
 # =========================
-# BACKTEST
+# WIN RATE (backtest)
 # =========================
-def backtest(close):
+def win_rate(close):
     returns = close.pct_change().dropna()
+    if len(returns) == 0:
+        return 0
     wins = returns[returns > 0]
-    return round((len(wins) / len(returns)) * 100, 2) if len(returns) else 0
+    return round(len(wins) / len(returns) * 100, 2)
 
 # =========================
-# ANALİZ
+# ANALYZE
 # =========================
 def analyze(symbol):
     try:
         df = yf.download(symbol, period="1y", interval="1d", progress=False)
 
-        if df.empty or "Close" not in df:
+        if df is None or df.empty:
             return None
 
-        close = df["Close"].squeeze().dropna()
+        close = df["Close"].dropna().squeeze()
 
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-
-        if len(close) < 50:
+        if len(close) < 60:
             return None
 
         price = float(close.iloc[-1])
+
         rsi_val = float(rsi(close).iloc[-1])
         sma20 = float(close.rolling(20).mean().iloc[-1])
         sma50 = float(close.rolling(50).mean().iloc[-1])
-
         high_50 = float(close.tail(50).max())
-        winrate = backtest(close)
 
-        entry = price
-        sl = round(price * 0.95, 2)
-        tp = round(price * 1.10, 2)
+        wr = win_rate(close)
 
-        signal = "🟡 İZLE"
-        comment = "⚖️ Nötr"
+        # 🔥 ENTRY (GEÇMİŞ DEĞİL)
+        entry = round(price * 0.995, 2)
 
-        if rsi_val > 60 and price > sma20 and price > sma50:
-            signal = "🔥 GÜÇLÜ AL"
-            comment = "📈 Güçlü trend"
+        sl = round(price * 0.97, 2)
+        tp = round(price * 1.06, 2)
 
-        elif rsi_val > 52 and price > sma20:
-            signal = "🟢 AL"
-            comment = "🚀 Momentum başladı"
+        # =========================
+        # SIGNAL LOGIC
+        # =========================
+        signal = "🟡 BEKLE"
+        note = "⚖️ Nötr"
 
         if price >= high_50 * 0.97:
             signal = "🔴 SAT (ZİRVE)"
-            comment = "⚠️ Tepeden satış riski"
+            note = "⚠️ Zirveye yakın"
 
-        elif price < sma50 and rsi_val < 45:
+        elif rsi_val > 60 and price > sma20:
+            signal = "🟢 AL"
+            note = "📈 Trend yukarı"
+
+        elif rsi_val < 40 and price < sma20:
             signal = "🔴 SAT"
-            comment = "📉 Düşüş trendi"
+            note = "📉 Zayıf trend"
 
-        text = f"""{signal} {symbol.replace('.IS','')}
-💰 {round(price,2)}
+        else:
+            signal = "🟡 BEKLE"
+            note = "⏳ Net sinyal yok"
+
+        text = f"""
+{signal} {symbol.replace('.IS','')}
+
+💰 Fiyat: {round(price,2)}
 📊 RSI: {round(rsi_val,2)}
-🎯 Entry: {round(entry,2)}
-🛑 SL: {sl} | 🎯 TP: {tp}
-📈 Win Rate: %{winrate}
-{comment}"""
+
+🎯 Entry: {entry}
+🛑 SL: {sl}
+🎯 TP: {tp}
+
+📈 Win Rate: %{wr}
+
+{note}
+"""
 
         return signal, text
 
     except Exception as e:
-        print("ANALYZE ERROR:", symbol, e)
+        print("ERROR:", symbol, e)
         return None
 
 # =========================
-# TELEGRAM (FIXED)
+# TELEGRAM
 # =========================
-def send(msg):
+def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    # 🔥 mesaj çok uzunsa parçala
-    chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
+    # uzun mesaj böl
+    for i in range(0, len(text), 4000):
+        chunk = text[i:i+4000]
 
-    for part in chunks:
         try:
-            r = requests.post(url, data={
+            res = requests.post(url, data={
                 "chat_id": CHAT_ID,
-                "text": part
+                "text": chunk
             })
 
-            print("STATUS:", r.status_code)
-            print("RESPONSE:", r.text)
-
-            time.sleep(1)
+            print("STATUS:", res.status_code)
+            print("RESPONSE:", res.text)
 
         except Exception as e:
             print("TELEGRAM ERROR:", e)
 
+        time.sleep(1)
+
 # =========================
-# RUN
+# MAIN
 # =========================
-def run():
+def main():
     symbols = load_symbols()
 
-    strong, buys, sells, watch = [], [], [], []
+    al_list = []
+    sat_list = []
+    bekle_list = []
 
     for s in symbols:
-        r = analyze(s)
-        if r is None:
+        result = analyze(s)
+
+        if result is None:
             continue
 
-        signal, text = r
+        signal, text = result
 
-        if "🔥" in signal:
-            strong.append(text)
-        elif "🟢" in signal:
-            buys.append(text)
-        elif "🔴" in signal:
-            sells.append(text)
+        if "AL" in signal:
+            al_list.append(text)
+        elif "SAT" in signal:
+            sat_list.append(text)
         else:
-            watch.append(text)
+            bekle_list.append(text)
 
     report = "🔥 AKILLI TRADER BOT\n\n"
 
-    if strong:
-        report += "🔥 GÜÇLÜ AL\n━━━━━━━━━━━━━━\n\n"
-        report += "\n\n━━━━━━━━━━━━━━\n\n".join(strong) + "\n\n"
-
-    if buys:
+    if al_list:
         report += "🟢 AL\n━━━━━━━━━━━━━━\n\n"
-        report += "\n\n━━━━━━━━━━━━━━\n\n".join(buys) + "\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(al_list) + "\n\n"
 
-    if sells:
+    if sat_list:
         report += "🔴 SAT\n━━━━━━━━━━━━━━\n\n"
-        report += "\n\n━━━━━━━━━━━━━━\n\n".join(sells) + "\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(sat_list) + "\n\n"
 
-    if watch:
-        report += "🟡 İZLE\n━━━━━━━━━━━━━━\n\n"
-        report += "\n\n━━━━━━━━━━━━━━\n\n".join(watch)
+    if bekle_list:
+        report += "🟡 BEKLE\n━━━━━━━━━━━━━━\n\n"
+        report += "\n\n━━━━━━━━━━━━━━\n\n".join(bekle_list)
 
-    if not strong and not buys and not sells:
-        report = "⚠️ Bugün sinyal yok"
+    if not (al_list or sat_list):
+        report = "⚠️ Sinyal yok"
 
-    send(report)
+    send_message(report)
     print(report)
 
 # =========================
-# TEST (İLK ÇALIŞTIRMADA)
+# RUN
 # =========================
 if __name__ == "__main__":
-    send("🚀 BOT TEST MESAJI")
-    run()
+    main()
