@@ -3,11 +3,10 @@ import requests
 import pandas as pd
 import numpy as np
 import ta
-import time
 from datetime import datetime
 
 # =========================
-# TELEGRAM AYARLARI
+# TELEGRAM
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -24,7 +23,7 @@ def load_symbols():
         return [x.strip() for x in f.readlines() if x.strip()]
 
 # =========================
-# VERİ ÇEKME (ÖRNEK YAHOO)
+# DATA
 # =========================
 def get_data(symbol):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.IS"
@@ -38,24 +37,16 @@ def get_data(symbol):
         return None
 
 # =========================
-# RSI HESAPLA
+# RSI
 # =========================
-def calculate_rsi(df):
+def rsi(df):
     return ta.momentum.RSIIndicator(df["close"], window=14).rsi().iloc[-1]
 
 # =========================
-# SQUEEZE MOMENTUM
+# WIN RATE (BASIC BACKTEST)
 # =========================
-def squeeze_momentum(df):
-    bb = ta.volatility.BollingerBands(df["close"])
-    width = bb.bollinger_hband() - bb.bollinger_lband()
-    return width.iloc[-1]
-
-# =========================
-# WIN RATE BACKTEST
-# =========================
-def backtest(df):
-    win = 0
+def win_rate(df):
+    wins = 0
     total = 0
 
     for i in range(20, len(df)-1):
@@ -66,19 +57,31 @@ def backtest(df):
         sl = entry * 0.98
 
         if (future >= tp).any():
-            win += 1
-        elif (future <= sl).any():
-            pass
+            wins += 1
 
         total += 1
 
-    if total == 0:
-        return 0
-
-    return (win / total) * 100
+    return (wins / total * 100) if total > 0 else 0
 
 # =========================
-# SİNYAL ÜRET
+# SCORE SYSTEM (EN ÖNEMLİ KISIM)
+# =========================
+def score_signal(rsi_val, win):
+    score = 0
+
+    if 40 < rsi_val < 70:
+        score += 1
+
+    if win > 45:
+        score += 1
+
+    if rsi_val < 60:
+        score += 1
+
+    return score
+
+# =========================
+# ANALYZE
 # =========================
 def analyze(symbol):
     df = get_data(symbol)
@@ -86,40 +89,37 @@ def analyze(symbol):
         return None
 
     price = round(df["close"].iloc[-1], 2)
-    rsi = round(calculate_rsi(df), 2)
-    winrate = round(backtest(df), 2)
-    squeeze = squeeze_momentum(df)
+    rsi_val = round(rsi(df), 2)
+    win = round(win_rate(df), 2)
 
-    # ❌ FİLTRELER
-    if rsi > 68:
+    score = score_signal(rsi_val, win)
+
+    # ❗ ZİRVE FİLTRESİ (çok önemli)
+    if rsi_val > 72:
         return None
 
-    if squeeze < 0.5:
+    if score < 2:
         return None
 
-    if winrate < 50:
-        return None
-
-    # 🎯 LEVELS
     sl = round(price * 0.97, 2)
     tp = round(price * 1.05, 2)
 
     return {
         "symbol": symbol,
         "price": price,
-        "rsi": rsi,
+        "rsi": rsi_val,
         "sl": sl,
         "tp": tp,
-        "winrate": winrate
+        "win": win
     }
 
 # =========================
-# RAPOR OLUŞTUR
+# RAPOR
 # =========================
 def create_report(results):
-    today = datetime.now().strftime("%Y-%m-%d")
+    date = datetime.now().strftime("%Y-%m-%d")
 
-    msg = f"🔥 AKILLI TRADER BOT - {today}\n\n"
+    msg = f"🔥 AKILLI TRADER BOT - {date}\n\n"
 
     if not results:
         msg += "❌ SİNYAL YOK\n"
@@ -136,7 +136,7 @@ def create_report(results):
 🎯 Entry:{r['price']}
 🛑 SL:{r['sl']}
 🎯 TP:{r['tp']}
-📈 Win Rate:%{r['winrate']}
+📈 Win Rate:%{r['win']}
 
 """
 
@@ -161,7 +161,7 @@ def main():
     send_telegram(msg)
 
 # =========================
-# ÇALIŞTIR
+# RUN
 # =========================
 if __name__ == "__main__":
     main()
