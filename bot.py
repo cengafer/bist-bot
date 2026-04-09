@@ -5,18 +5,18 @@ import numpy as np
 import ta
 from datetime import datetime
 
-# =========================
-# TELEGRAM
-# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# =========================
+# TELEGRAM
+# =========================
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 # =========================
-# HİSSE LİSTESİ
+# HİSSELER
 # =========================
 def load_symbols():
     with open("bist100.txt", "r") as f:
@@ -37,19 +37,32 @@ def get_data(symbol):
         return None
 
 # =========================
-# RSI
+# INDICATORS
 # =========================
-def rsi(df):
-    return ta.momentum.RSIIndicator(df["close"], window=14).rsi().iloc[-1]
+def indicators(df):
+    df["ema50"] = ta.trend.ema_indicator(df["close"], window=50)
+    df["ema200"] = ta.trend.ema_indicator(df["close"], window=200)
+
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+
+    macd = ta.trend.MACD(df["close"])
+    df["macd"] = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
+
+    df["atr"] = ta.volatility.AverageTrueRange(
+        high=df["close"], low=df["close"], close=df["close"]
+    ).average_true_range()
+
+    return df
 
 # =========================
-# WIN RATE (BASIC BACKTEST)
+# WIN RATE
 # =========================
 def win_rate(df):
     wins = 0
     total = 0
 
-    for i in range(20, len(df)-1):
+    for i in range(50, len(df)-1):
         entry = df["close"].iloc[i]
         future = df["close"].iloc[i+1:i+6]
 
@@ -64,79 +77,92 @@ def win_rate(df):
     return (wins / total * 100) if total > 0 else 0
 
 # =========================
-# SCORE SYSTEM (EN ÖNEMLİ KISIM)
+# SCORE SYSTEM
 # =========================
-def score_signal(rsi_val, win):
-    score = 0
+def score(row):
+    s = 0
 
-    if 40 < rsi_val < 70:
-        score += 1
+    # Trend
+    if row["close"] > row["ema50"]:
+        s += 2
+    if row["ema50"] > row["ema200"]:
+        s += 1
 
-    if win > 45:
-        score += 1
+    # RSI
+    if 45 < row["rsi"] < 65:
+        s += 2
 
-    if rsi_val < 60:
-        score += 1
+    # MACD
+    if row["macd"] > row["macd_signal"]:
+        s += 1
 
-    return score
+    return s
 
 # =========================
 # ANALYZE
 # =========================
 def analyze(symbol):
     df = get_data(symbol)
-    if df is None or len(df) < 50:
+    if df is None or len(df) < 100:
         return None
 
-    price = round(df["close"].iloc[-1], 2)
-    rsi_val = round(rsi(df), 2)
+    df = indicators(df)
+
+    last = df.iloc[-1]
+
+    price = round(last["close"], 2)
+    rsi_val = round(last["rsi"], 2)
     win = round(win_rate(df), 2)
 
-    score = score_signal(rsi_val, win)
+    s = score(last)
 
-    # ❗ ZİRVE FİLTRESİ (çok önemli)
-    if rsi_val > 72:
+    # ❗ EXTREME OVERBOUGHT FILTER
+    if rsi_val > 75:
         return None
 
-    if score < 2:
+    # ❗ WEAK SCORE FILTER
+    if s < 3:
         return None
-
-    sl = round(price * 0.97, 2)
-    tp = round(price * 1.05, 2)
 
     return {
         "symbol": symbol,
         "price": price,
         "rsi": rsi_val,
-        "sl": sl,
-        "tp": tp,
-        "win": win
+        "win": win,
+        "score": s
     }
 
 # =========================
-# RAPOR
+# REPORT
 # =========================
 def create_report(results):
     date = datetime.now().strftime("%Y-%m-%d")
 
-    msg = f"🔥 AKILLI TRADER BOT - {date}\n\n"
+    msg = f"🔥 PRO AKILLI TRADER BOT - {date}\n\n"
 
     if not results:
-        msg += "❌ SİNYAL YOK\n"
-        return msg
+        return "❌ SİNYAL YOK (market zayıf olabilir)"
 
-    msg += "🟢 AL SİNYALLERİ\n━━━━━━━━━━━━━━\n"
+    results = sorted(results, key=lambda x: x["score"], reverse=True)
 
-    for r in results:
+    msg += "🟢 EN GÜÇLÜ SİNYALLER\n━━━━━━━━━━━━━━\n"
+
+    for r in results[:20]:
+
+        entry = r["price"]
+        sl = round(entry * 0.97, 2)
+        tp = round(entry * 1.05, 2)
+
         msg += f"""
-🟢 AL {r['symbol']}
+🟢 {r['symbol']}
 
-💰 Fiyat:{r['price']}
+💰 Fiyat:{entry}
 📊 RSI:{r['rsi']}
-🎯 Entry:{r['price']}
-🛑 SL:{r['sl']}
-🎯 TP:{r['tp']}
+🎯 Entry:{entry}
+🛑 SL:{sl}
+🎯 TP:{tp}
 📈 Win Rate:%{r['win']}
+⭐ Skor:{r['score']}
 
 """
 
@@ -160,8 +186,5 @@ def main():
     msg = create_report(results)
     send_telegram(msg)
 
-# =========================
-# RUN
-# =========================
 if __name__ == "__main__":
     main()
