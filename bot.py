@@ -1,9 +1,11 @@
 import os
 import yfinance as yf
 import requests
+import pandas as pd
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
 
 # =========================
 # RSI
@@ -21,11 +23,43 @@ def rsi(series, period=14):
 
 
 # =========================
+# WIN RATE (BACKTEST)
+# =========================
+def calculate_win_rate(df, lookback=15):
+    closes = df["Close"].dropna().values
+
+    wins = 0
+    total = 0
+
+    for i in range(len(closes) - lookback - 1):
+        entry = closes[i]
+
+        future = closes[i+1:i+lookback]
+
+        tp = entry * 1.05
+        sl = entry * 0.97
+
+        for f in future:
+            if f >= tp:
+                wins += 1
+                break
+            if f <= sl:
+                break
+
+        total += 1
+
+    if total == 0:
+        return 0
+
+    return (wins / total) * 100
+
+
+# =========================
 # LOAD SYMBOLS
 # =========================
 def load_symbols():
-    with open("bist100.txt") as f:
-        return [x.strip().upper() + ".IS" for x in f if x.strip()]
+    with open("bist100.txt", "r") as f:
+        return [line.strip().upper() + ".IS" for line in f if line.strip()]
 
 
 # =========================
@@ -35,13 +69,10 @@ def analyze(symbol):
     try:
         df = yf.download(symbol, period="6mo", interval="1d", progress=False)
 
-        if df is None or df.empty:
+        if df is None or df.empty or len(df) < 50:
             return None
 
         close = df["Close"].dropna()
-
-        if len(close) < 50:
-            return None
 
         price = float(close.iloc[-1])
         rsi_val = float(rsi(close).iloc[-1])
@@ -49,11 +80,11 @@ def analyze(symbol):
         high_50 = float(close.tail(50).max())
         low_50 = float(close.tail(50).min())
 
+        win_rate = calculate_win_rate(df)
+
         # =========================
         # SIGNAL
         # =========================
-        signal = "🟡 BEKLE"
-
         if price >= high_50 * 0.98:
             signal = "🔴 SAT (ZİRVE)"
 
@@ -67,10 +98,9 @@ def analyze(symbol):
             signal = "🟡 BEKLE"
 
         # =========================
-        # ENTRY FIX (NO NONSENSE)
+        # ENTRY FIX (NO BIAS)
         # =========================
         entry = round(price, 2)
-
         sl = round(price * 0.97, 2)
         tp = round(price * 1.05, 2)
 
@@ -80,12 +110,14 @@ def analyze(symbol):
 💰 Fiyat: {price}
 📊 RSI: {round(rsi_val,2)}
 
+📈 Win Rate: %{round(win_rate,2)}
+
 🎯 Entry: {entry}
 🛑 SL: {sl}
 🎯 TP: {tp}
 """
 
-        return signal, text
+        return text
 
     except Exception as e:
         print("ERROR:", symbol, e)
@@ -127,14 +159,12 @@ def main():
         if result is None:
             continue
 
-        signal, text = result
-
-        if "AL" in signal:
-            al.append(text)
-        elif "SAT" in signal:
-            sat.append(text)
+        if "AL" in result:
+            al.append(result)
+        elif "SAT" in result:
+            sat.append(result)
         else:
-            bekle.append(text)
+            bekle.append(result)
 
     report = "🔥 AKILLI TRADER BOT\n\n"
 
